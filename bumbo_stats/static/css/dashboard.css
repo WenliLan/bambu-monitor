@@ -1,0 +1,292 @@
+/* ===== 全局样式 ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface-2: #232736;
+    --border: #2e3348;
+    --text: #e4e6f0;
+    --text-dim: #8b8fa8;
+    --accent: #4f8cff;
+    --green: #22c55e;
+    --yellow: #eab308;
+    --red: #ef4444;
+    --radius: 10px;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+}
+
+/* ===== 导航栏 ===== */
+.navbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+
+.nav-brand {
+    font-size: 1.25rem;
+    font-weight: 700;
+}
+
+.nav-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--text-dim);
+}
+
+.ws-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+.ws-connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.ws-disconnected { background: var(--red); }
+
+/* ===== 容器 ===== */
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 24px;
+}
+
+.section { margin-bottom: 32px; }
+
+.section-title {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.today-date {
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--text-dim);
+    margin-left: auto;
+}
+
+/* ===== 摄像头网格 ===== */
+.camera-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+}
+
+.camera-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    overflow: hidden;
+    border: 1px solid var(--border);
+}
+
+.camera-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    font-size: 0.85rem;
+}
+
+.camera-name { font-weight: 600; }
+.camera-location { color: var(--text-dim); font-size: 0.8rem; }
+
+.camera-view {
+    position: relative;
+    aspect-ratio: 4/3;
+    background: #000;
+}
+
+.camera-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.camera-overlay {
+    position: absolute;
+    top: 8px;
+    left: 8px;
+}
+
+.camera-state {
+    background: rgba(0,0,0,0.7);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+/* ===== 打印机状态卡片 ===== */
+.printer-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+}
+
+.printer-card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    overflow: hidden;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.card-name { font-weight: 600; }
+
+.state-badge {
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.badge-idle { background: #1e3a5f; color: #60a5fa; }
+.badge-running { background: #14532d; color: #4ade80; }
+.badge-pause { background: #422006; color: #fbbf24; }
+.badge-finish { background: #1e1b4b; color: #a78bfa; }
+.badge-failed { background: #450a0a; color: #f87171; }
+.badge-offline { background: #1f1f1f; color: #6b7280; }
+
+.card-body { padding: 12px 16px; }
+
+.stat-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 0.88rem;
+}
+
+.stat-label {
+    flex: 0 0 72px;
+    color: var(--text-dim);
+    font-size: 0.8rem;
+}
+
+.stat-value {
+    flex: 1;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.file-name {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.82rem;
+}
+
+.progress-bar-container {
+    flex: 1;
+    height: 6px;
+    background: var(--surface-2);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+/* ===== 产能饱和度 ===== */
+.utilization-list {
+    background: var(--surface);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    padding: 16px;
+}
+
+.utilization-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+.utilization-row:last-child { border-bottom: none; }
+
+.util-name {
+    flex: 0 0 100px;
+    font-weight: 500;
+    font-size: 0.9rem;
+}
+
+.util-percent {
+    flex: 0 0 60px;
+    font-weight: 700;
+    font-size: 1.1rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.util-bar-container {
+    flex: 1;
+    height: 14px;
+    background: var(--surface-2);
+    border-radius: 7px;
+    overflow: hidden;
+}
+
+.util-bar {
+    height: 100%;
+    border-radius: 7px;
+    transition: width 0.6s ease;
+}
+.util-bar-green { background: var(--green); }
+.util-bar-yellow { background: var(--yellow); }
+.util-bar-red { background: var(--red); }
+
+.util-time {
+    flex: 0 0 72px;
+    text-align: right;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ===== 图表容器 ===== */
+.chart-container {
+    background: var(--surface);
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    padding: 20px;
+    height: 350px;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 768px) {
+    .container { padding: 12px; }
+    .camera-grid { grid-template-columns: 1fr; }
+    .printer-cards { grid-template-columns: 1fr; }
+    .util-name { flex: 0 0 70px; font-size: 0.82rem; }
+}
