@@ -29,11 +29,11 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 
-from bumbo_stats.models import PrinterState, PrinterStatus
+from bumbo_stats.models import PrinterState, PrinterStatus, HMSError
 from bumbo_stats.printer.monitor import PrintMonitor
 from bumbo_stats.printer.wecom import (
     WeComNotifier, WeComConfig, _PrinterNotifState,
-    EVENT_LAYER3, EVENT_COMPLETED,
+    EVENT_LAYER3, EVENT_COMPLETED, EVENT_ERROR,
 )
 
 
@@ -42,12 +42,14 @@ from bumbo_stats.printer.wecom import (
 # ---------------------------------------------------------------------------
 
 def _make_status(serial, state=PrinterState.RUNNING, gcode_file="test.gcode",
-                current_layer=0, total_layers=100, progress=0):
+                current_layer=0, total_layers=100, progress=0,
+                hms_errors=None):
     return PrinterStatus(
         serial=serial, name="Test", state=state,
         gcode_file=gcode_file, last_updated=datetime.now(),
         current_layer=current_layer, total_layers=total_layers,
         progress=progress,
+        hms_errors=hms_errors or [],
     )
 
 
@@ -58,6 +60,7 @@ def _make_wecom_config():
         chatid="fake_chatid",
         layer3=True,
         completed=True,
+        error=True,
     )
 
 
@@ -766,3 +769,178 @@ class TestDoubleLayerDeduplication:
                           current_layer=100, total_layers=100, progress=100)
         mon._check_progress_events("S001", s4)
         assert wecom._queue.qsize() == 2  # 仍是2
+
+
+# ---------------------------------------------------------------------------
+# TC-NOTIFY-29~: HMS 错误通知测试
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestHMSErrorNotification:
+    async def test_tc_notify_29_hms_error_triggers_notification(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-29: HMS 错误触发 error 通知"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        hms_errors = [HMSError(code=0x0B01, severity="error", message="堵嘴检测")]
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=50, total_layers=100, progress=50,
+                         hms_errors=hms_errors)
+        mon._check_progress_events("S001", s)
+
+        error_calls = [c for c in mock_wecom_notifier.notify.call_args_list
+                       if c[0][1] == EVENT_ERROR]
+        assert len(error_calls) == 1
+
+    async def test_tc_notify_30_same_hms_error_not_duplicated(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-30: 同一 HMS 错误不重复通知（去重逻辑在 wecom.notify() 中）"""
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        hms_errors = [HMSError(code=0x0B01, severity="error", message="堵嘴检测")]
+
+        # 第1次
+        s1 = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=50, hms_errors=hms_errors)
+        mon._check_progress_events("S001", s1)
+
+        # 第2次（同样错误）- wecom.notify() 内部去重
+        s2 = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=51, hms_errors=hms_errors)
+        mon._check_progress_events("S001", s2)
+
+        assert wecom._queue.qsize() == 1  # 不重复
+
+    async def test_tc_notify_31_multiple_hms_errors_merged(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-31: 多个 HMS 错误合并为一条通知"""
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        # 同时有堵头和缺料两个错误
+        hms_errors = [
+            HMSError(code=0x0B01, severity="error", message="堵嘴检测"),
+            HMSError(code=0x0501, severity="error", message="缺料"),
+        ]
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=50, hms_errors=hms_errors)
+        mon._check_progress_events("S001", s)
+
+        assert wecom._queue.qsize() == 1
+        item = await wecom._queue.get()
+        assert item["event"] == EVENT_ERROR
+        assert len(item["errors"]) == 2
+
+    async def test_tc_notify_32_new_job_resets_hms_error(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-32: 新任务开始时 HMS 错误状态重置，可再次通知"""
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job1.gcode"
+
+        # job1 有错误
+        hms_errors1 = [HMSError(code=0x0B01, severity="error", message="堵嘴检测")]
+        s1 = _make_status("S001", PrinterState.RUNNING, "job1.gcode",
+                         current_layer=50, hms_errors=hms_errors1)
+        mon._check_progress_events("S001", s1)
+        assert wecom._queue.qsize() == 1
+
+        # job2 开始（gcode 变化）但无错误，不触发
+        s2 = _make_status("S001", PrinterState.RUNNING, "job2.gcode",
+                         current_layer=1, hms_errors=[])
+        mon._check_progress_events("S001", s2)
+        assert wecom._queue.qsize() == 1
+
+        # job2 出现错误，能再次触发
+        hms_errors2 = [HMSError(code=0x0501, severity="error", message="缺料")]
+        s3 = _make_status("S001", PrinterState.RUNNING, "job2.gcode",
+                         current_layer=10, hms_errors=hms_errors2)
+        mon._check_progress_events("S001", s3)
+        assert wecom._queue.qsize() == 2
+
+    async def test_tc_notify_33_warning_severity_not_notified(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-33: severity=warning 的 HMS 条目不触发通知"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        # 只有 warning，没有 error
+        hms_warnings = [HMSError(code=0x0901, severity="warning", message="摄像头离线")]
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=50, hms_errors=hms_warnings)
+        mon._check_progress_events("S001", s)
+
+        error_calls = [c for c in mock_wecom_notifier.notify.call_args_list
+                       if c[0][1] == EVENT_ERROR]
+        assert len(error_calls) == 0
+
+    async def test_tc_notify_34_hms_error_disabled_in_config(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-34: 配置中 error=false 时不发送错误通知"""
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        cfg = _make_wecom_config()
+        cfg.error = False  # 禁用
+        wecom = WeComNotifier(cfg, [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        hms_errors = [HMSError(code=0x0B01, severity="error", message="堵嘴检测")]
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=50, hms_errors=hms_errors)
+        mon._check_progress_events("S001", s)
+
+        assert wecom._queue.qsize() == 0
+
+    async def test_tc_notify_35_multiple_printers_hms_independent(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-35: 多台打印机 HMS 错误独立追踪，互不干扰"""
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        p1_cfg = PrinterConfig(serial="S001", name="P1")
+        p2_cfg = PrinterConfig(serial="S002", name="P2")
+        wecom = WeComNotifier(_make_wecom_config(), [p1_cfg, p2_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job1.gcode"
+        mon._last_states["S002"] = PrinterState.RUNNING
+        mon._last_gcode["S002"] = "job2.gcode"
+
+        # S001 有错误
+        s1 = _make_status("S001", PrinterState.RUNNING, "job1.gcode",
+                         current_layer=50, hms_errors=[
+                             HMSError(code=0x0B01, severity="error", message="堵嘴检测"),
+                         ])
+        mon._check_progress_events("S001", s1)
+
+        # S002 有不同错误
+        s2 = _make_status("S002", PrinterState.RUNNING, "job2.gcode",
+                         current_layer=50, hms_errors=[
+                             HMSError(code=0x0501, severity="error", message="缺料"),
+                         ])
+        mon._check_progress_events("S002", s2)
+
+        assert wecom._queue.qsize() == 2

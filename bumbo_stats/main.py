@@ -101,7 +101,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="bumbo_stats 0.3.0",
+        version="bumbo_stats 0.4.0",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")

@@ -18,6 +18,13 @@ class PrinterState(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class HMSError(BaseModel):
+    """HMS 健康监控错误"""
+    code: int = 0          # 错误码，如 0x0B01（堵嘴）
+    severity: str = ""    # "error" 或 "warning"
+    message: str = ""     # 友好描述
+
+
 class PrinterStatus(BaseModel):
     """打印机实时状态"""
     serial: str
@@ -37,6 +44,8 @@ class PrinterStatus(BaseModel):
     wifi_signal: str = ""
     light_on: bool = False
     last_updated: Optional[datetime] = None
+    hms_errors: list[HMSError] = []   # HMS 错误列表
+    ams_status: Optional[dict] = None  # AMS 耗材状态
 
 
 class DailyUsage(BaseModel):

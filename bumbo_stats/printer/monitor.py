@@ -189,6 +189,18 @@ class PrintMonitor:
             )
             self.wecom_notifier.notify(serial, "completed", status)
 
+        # 事件3：HMS 错误（多个错误合并为一条通知）
+        if status.hms_errors and self.wecom_notifier:
+            error_events = [e for e in status.hms_errors if e.severity == "error"]
+            if error_events:
+                logger.info(
+                    "触发HMS错误通知: %s errors=%s file=%s",
+                    serial,
+                    [(e.code, e.message) for e in error_events],
+                    gcode,
+                )
+                self.wecom_notifier.notify(serial, "error", status, error_events)
+
     async def _handle_state_change(self, serial: str, status: PrinterStatus):
         """处理状态变更事件（打印开始/结束检测）"""
         prev_state = self._last_states.get(serial)

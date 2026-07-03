@@ -38,6 +38,7 @@ class WeComSettings(BaseModel):
     chatid: str = Field(default="", description="群聊 chatid，留空则自动发现")
     layer3: bool = Field(default=True, description="打印到第3层时发送通知")
     completed: bool = Field(default=True, description="打印完成时发送通知")
+    error: bool = Field(default=True, description="HMS 错误时发送通知")
 
 
 class AppConfig(BaseModel):

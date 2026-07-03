@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Callable, Awaitable, Optional
 
 from ..config import PrinterConfig
-from ..models import PrinterState, PrinterStatus
+from ..models import PrinterState, PrinterStatus, HMSError
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,8 @@ class PrinterManager:
                 parse_data = cached
 
             # 解析 MQTT 推送数据（使用合并后的数据）
-            status = self._parse_status(serial, config.name, parse_data)
+            ams_data = data.get("ams")
+            status = self._parse_status(serial, config.name, parse_data, ams_data)
             self._status_cache[serial] = status
 
             # 触发异步回调（线程安全地调度到 asyncio 事件循环）
@@ -239,13 +240,15 @@ class PrinterManager:
 
         return callback
 
-    def _parse_status(self, serial: str, name: str, print_data: dict) -> PrinterStatus:
+    def _parse_status(self, serial: str, name: str, print_data: dict,
+                      ams_data=None) -> PrinterStatus:
         """从云端 MQTT 推送数据解析 PrinterStatus
 
         Args:
             serial: 打印机序列号
             name: 打印机名称
             print_data: MQTT 推送的 print 数据（已合并）
+            ams_data: AMS 耗材数据（从 MQTT data 中提取）
 
         Returns:
             PrinterStatus 实例
@@ -262,6 +265,21 @@ class PrinterManager:
                 if isinstance(light, dict) and light.get("mode") == "on":
                     light_on = True
                     break
+
+        # 解析 HMS 错误
+        hms_raw = print_data.get("hms", [])
+        hms_errors = []
+        if hms_raw and isinstance(hms_raw, list):
+            for hms_item in hms_raw:
+                if isinstance(hms_item, dict):
+                    hms_errors.append(HMSError(
+                        code=hms_item.get("err_code", 0),
+                        severity=hms_item.get("severity", ""),
+                        message=hms_item.get("err_msg", ""),
+                    ))
+
+        # 解析 AMS 耗材状态
+        ams_status = dict(ams_data) if ams_data else None
 
         # 文件名兼容：云端可能用 subtask_name
         gcode_file = str(print_data.get("gcode_file", "") or print_data.get("subtask_name", ""))
@@ -283,5 +301,7 @@ class PrinterManager:
             print_speed=int(print_data.get("spd_lvl", 0)),
             wifi_signal=str(print_data.get("wifi_signal", "")),
             light_on=light_on,
+            hms_errors=hms_errors,
+            ams_status=ams_status,
             last_updated=datetime.now(),
         )

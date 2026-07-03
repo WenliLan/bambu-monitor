@@ -3,6 +3,7 @@
 触发事件:
   - layer3:    打印到达第 3 层（首层确认，打印正常进行中）
   - completed: 打印完成（进度 100% / 状态 FINISH）
+  - error:     HMS 健康监控错误（堵头/卡料/缺料等）
 
 架构:
   WeComNotifier 维护一个 asyncio.Queue 和一个后台任务。
@@ -11,10 +12,10 @@
 """
 
 import asyncio
+import json
 import logging
 import time
-import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from ..config import PrinterConfig
@@ -41,6 +42,7 @@ class _SilentLogger:
 # 通知事件类型
 EVENT_LAYER3 = "layer3"
 EVENT_COMPLETED = "completed"
+EVENT_ERROR = "error"
 
 # 每次通知发送的截图数量和间隔（降低挤出机遮挡概率）
 FRAMES_PER_NOTIFICATION = 2
@@ -53,6 +55,7 @@ class _PrinterNotifState:
     last_gcode: str = ""
     layer3_sent: bool = False
     completed_sent: bool = False
+    last_error_snapshot: str = ""  # 上次通知的错误快照（防止同错误重复通知）
 
     def reset_if_new_job(self, gcode: str):
         """检测到新打印任务时重置通知状态"""
@@ -60,6 +63,7 @@ class _PrinterNotifState:
             self.last_gcode = gcode
             self.layer3_sent = False
             self.completed_sent = False
+            self.last_error_snapshot = ""  # 新任务开始时重置错误状态
 
 
 @dataclass
@@ -70,6 +74,7 @@ class WeComConfig:
     chatid: str = ""           # 群聊 chatid，留空则自动发现
     layer3: bool = True        # 是否在第 3 层时发送
     completed: bool = True     # 是否在打印完成时发送
+    error: bool = True         # 是否在 HMS 错误时发送
 
 
 class WeComNotifier:
@@ -110,13 +115,14 @@ class WeComNotifier:
     # 公开 API
     # ------------------------------------------------------------------
 
-    def notify(self, serial: str, event: str, status=None):
+    def notify(self, serial: str, event: str, status=None, errors: list = None):
         """将通知事件加入队列（线程安全，非阻塞）
 
         Args:
             serial: 打印机序列号
-            event: 事件类型 (EVENT_LAYER3 / EVENT_COMPLETED)
+            event: 事件类型 (EVENT_LAYER3 / EVENT_COMPLETED / EVENT_ERROR)
             status: 当前 PrinterStatus（可选，用于丰富消息内容）
+            errors: 错误列表（仅 EVENT_ERROR 时使用）
         """
         state = self._states.get(serial)
         if not state:
@@ -134,6 +140,18 @@ class WeComNotifier:
             if state.completed_sent or not self._cfg.completed:
                 return
             state.completed_sent = True
+        elif event == EVENT_ERROR:
+            if not self._cfg.error:
+                return
+            # 合并多个错误为一条通知，通过快照比较防止重复
+            if errors:
+                # 用 (code, severity, message) 元组列表做快照，保证可排序
+                snapshot = json.dumps(
+                    sorted((e.code, e.severity, e.message) for e in errors),
+                )
+                if state.last_error_snapshot == snapshot:
+                    return  # 错误完全相同，跳过
+                state.last_error_snapshot = snapshot
 
         printer_name = self._printer_names.get(serial, serial[-6:])
         try:
@@ -142,6 +160,7 @@ class WeComNotifier:
                 "printer_name": printer_name,
                 "event": event,
                 "status": status,
+                "errors": errors,
                 "ts": time.time(),
             })
             logger.info("企业微信通知入队: %s [%s] %s", printer_name, event, gcode)
@@ -247,6 +266,7 @@ class WeComNotifier:
         printer_name = item["printer_name"]
         event = item["event"]
         status = item.get("status")
+        errors = item.get("errors")
 
         # 等待 chatid 就绪
         if not self._chatid:
@@ -259,11 +279,11 @@ class WeComNotifier:
                 logger.warning("chatid 超时，跳过本次通知")
                 return
 
-        # 获取摄像头帧（多张，降低遮挡概率）
-        frames = await self._get_camera_frames(serial)
+        # HMS 错误通知不发截图，只发文字（错误信息已经包含关键视觉信息）
+        frames = [] if event == EVENT_ERROR else await self._get_camera_frames(serial)
 
         # 构建 markdown 消息
-        markdown = self._build_markdown(printer_name, event, status)
+        markdown = self._build_markdown(printer_name, event, status, errors)
 
         try:
             # 先发文字状态
@@ -294,7 +314,7 @@ class WeComNotifier:
                     "✅ 已发送监控截图: %s [%s] %d张",
                     printer_name, event, len(frames),
                 )
-            else:
+            elif event != EVENT_ERROR:
                 logger.warning("无摄像头帧，仅发送文字通知: %s", printer_name)
 
         except Exception as e:
@@ -346,8 +366,15 @@ class WeComNotifier:
             return None
 
     @staticmethod
-    def _build_markdown(printer_name: str, event: str, status) -> str:
-        """构建 Markdown 格式的通知消息"""
+    def _build_markdown(printer_name: str, event: str, status, errors=None) -> str:
+        """构建 Markdown 格式的通知消息
+
+        Args:
+            printer_name: 打印机名称
+            event: 事件类型
+            status: PrinterStatus
+            errors: 错误列表（仅 EVENT_ERROR 时使用）
+        """
         from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -355,6 +382,8 @@ class WeComNotifier:
             title = "🖨️ 打印已到达第 3 层"
         elif event == EVENT_COMPLETED:
             title = "✅ 打印已完成"
+        elif event == EVENT_ERROR:
+            title = "🚨 打印机异常"
         else:
             title = f"📢 {event}"
 
@@ -374,5 +403,11 @@ class WeComNotifier:
         if total > 0:
             lines.append(f"**层数**: {layer}/{total}")
             lines.append(f"**进度**: {progress}%")
+
+        # HMS 错误：合并显示所有错误
+        if event == EVENT_ERROR and errors:
+            lines.append("")
+            for err in errors:
+                lines.append(f"- **{err.message}** (码: {err.code})")
 
         return "\n".join(lines)
