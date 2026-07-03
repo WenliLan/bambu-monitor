@@ -21,7 +21,7 @@ class TestCLI:
                 main()
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
-        assert "0.3.0" in captured.out
+        assert "0.4.0" in captured.out
 
     def test_tc_cli_02_missing_config(self):
         """TC-CLI-02: 配置文件不存在时退出"""

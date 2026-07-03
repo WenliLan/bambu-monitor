@@ -68,7 +68,7 @@ def _do_serve(args):
     host = args.host or config.settings.host
     port = args.port or config.settings.port
 
-    print(f"Bumbo Stats v0.3.0 (云端模式)")
+    print(f"Bumbo Stats v0.4.0 (云端模式)")
     print(f"   监控 {len(config.printers)} 台打印机")
     print(f"   面板地址: http://{host}:{port}")
     print()
