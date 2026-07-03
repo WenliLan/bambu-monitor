@@ -1,6 +1,6 @@
 # Bumbo Stats — 拓竹3D打印机云端监控系统 设计文档
 
-> **版本**: 0.3.0 | **最后更新**: 2026-06-15
+> **版本**: 0.4.0 | **最后更新**: 2026-07-04
 
 ---
 
@@ -19,6 +19,7 @@ Bumbo Stats 是一个**拓竹 (Bambu Lab) 3D 打印机多机云端监控面板**
 | 打印历史记录 | 按打印机查看最近任务列表 |
 | 多打印机管理 | 支持同时监控多台打印机（当前 3 台） |
 | 断线自动重连 | MQTT 断线后自动重连，状态恢复 |
+| HMS 错误通知 | 企业微信推送堵头/卡料/缺料等 HMS 健康监控错误 |
 
 ### 技术栈
 
@@ -78,6 +79,13 @@ Bumbo Stats 是一个**拓竹 (Bambu Lab) 3D 打印机多机云端监控面板**
 - WebSocket 实时推送状态更新
 - 连接状态指示灯（绿/红）
 
+#### FR-08: HMS 错误检测与通知
+- 解析 MQTT 中的 `hms` 字段（堵头 0x0B01、缺料 0x0501、卡料 0x0601、热端温度异常等）
+- 企业微信机器人推送异常通知（支持配置开关）
+- 多错误合并为一条通知（避免刷屏）
+- 同错误码不重复通知（新任务开始后重置）
+- 每台打印机独立追踪，互不干扰
+
 ### 2.2 非功能需求
 
 | 编号 | 需求 | 说明 |
@@ -119,7 +127,8 @@ bumbo_stats/
 │   │   ├── __init__.py
 │   │   ├── manager.py                  # MQTT 打印机管理器
 │   │   ├── monitor.py                  # 后台状态监控 + 每日快照
-│   │   └── camera.py                   # 摄像头帧获取
+│   │   ├── camera.py                   # 摄像头帧获取
+│   │   └── wecom.py                    # 企业微信机器人通知
 │   │
 │   ├── templates/                      # Jinja2 模板
 │   │   ├── base.html                   # 基础模板（CDN + 导航栏）
@@ -133,7 +142,7 @@ bumbo_stats/
 │           ├── charts.js               # Chart.js 月度折线图
 │           └── camera.js               # 摄像头定时刷新
 │
-├── tests/                              # 测试包（128 个测试）
+├── tests/                              # 测试包（163 个测试）
 │   ├── conftest.py                     # 共享 fixtures
 │   ├── test_api.py                     # API 路由 (7)
 │   ├── test_auth.py                    # 认证 (5)
@@ -147,7 +156,8 @@ bumbo_stats/
 │   ├── test_monitor.py                 # 监控器 (22)
 │   ├── test_numerical.py               # 精确数值验证 (31)
 │   ├── test_templates.py               # 模板 (3)
-│   └── test_websocket.py               # WebSocket (3)
+│   ├── test_websocket.py               # WebSocket (3)
+│   └── test_wecom_notify.py            # 企业微信通知 (35)
 │
 └── data/                               # 运行时数据
     └── bumbo_stats.db                  # SQLite 数据库文件
@@ -377,7 +387,30 @@ Headers: Authorization: Basic base64(bblp:{access_code})
 # 不支持: X1 系列（API 限制）
 ```
 
-### 5.6 开机自启动
+### 5.6 HMS 错误检测与通知
+
+```python
+# HMS 错误码参考
+0x0B01 / 0x0B02  # 堵嘴（Nozzle Clog）
+0x0501 / 0x0502  # 缺料（Filament Runout）
+0x0601 / 0x0602  # 卡料（Filament Jam）
+0x0701           # 热端温度异常
+0x0301           # 热床温度异常
+
+# monitor.py 中的 HMS 检测
+if status.hms_errors and self.wecom_notifier:
+    error_events = [e for e in status.hms_errors if e.severity == "error"]
+    if error_events:
+        self.wecom_notifier.notify(serial, EVENT_ERROR, status, error_events)
+
+# wecom.py 中的合并去重（按错误码快照）
+snapshot = json.dumps(sorted((e.code, e.severity, e.message) for e in errors))
+if state.last_error_snapshot == snapshot:
+    return  # 错误完全相同则跳过
+state.last_error_snapshot = snapshot
+```
+
+### 5.7 开机自启动
 
 ```
 Windows 计划任务 (Task Scheduler)
@@ -393,7 +426,7 @@ start_service.bat:
 
 ---
 
-## 六、测试方案（97 个测试，100% 覆盖）
+## 六、测试方案（163 个测试，100% 覆盖）
 
 ### 6.1 覆盖率
 
@@ -403,7 +436,7 @@ start_service.bat:
 | `monitor.py` | 73 | **100%** |
 | **合计** | 224 | **100%** |
 
-**测试总数**: 128 个（原有 97 + 新增 31 精确数值验证）
+**测试总数**: 163 个（原有 128 + 新增 35 企业微信通知测试）
 
 ### 6.2 测试矩阵
 
@@ -518,7 +551,48 @@ start_service.bat:
 | test_models.py | 8 | 枚举、默认值、序列化、所有模型结构 |
 | test_templates.py | 3 | CDN 引用、页面区域、循环渲染 |
 | test_websocket.py | 3 | 连接/断开、广播、失败移除 |
+| test_wecom_notify.py | 35 | layer3/completed 去重、启动扫描、边界条件、HMS 错误通知 |
 | test_core.py | 1 | 占位 |
+
+#### 企业微信通知层 (test_wecom_notify.py — 35 tests, 含 HMS)
+
+| ID | 测试名 | 场景 |
+|---|--------|------|
+| TC-NOTIFY-01 | layer3_once | 同一 layer3 事件多次触发只通知一次 |
+| TC-NOTIFY-02 | completed_once | 同一 completed 事件多次触发只通知一次 |
+| TC-NOTIFY-03 | gcode_change_resets_layer3 | 新 gcode 重置 layer3 标记，可再次触发 |
+| TC-NOTIFY-04 | completed_new_job_resets | 新任务重置 completed 标记 |
+| TC-NOTIFY-05 | layer3_and_completed_independent | layer3 和 completed 独立，互不干扰 |
+| TC-NOTIFY-06 | queue_full_drops | 队列满时优雅丢弃 |
+| TC-NOTIFY-07 | startup_above_layer3 | 启动时 > 第3层，初始化 layer3_notified=True |
+| TC-NOTIFY-08 | startup_below_layer3 | 启动时 < 第3层，初始化 layer3_notified=False |
+| TC-NOTIFY-09 | startup_no_notification | 启动扫描不发送任何通知 |
+| TC-NOTIFY-10 | startup_no_wecom | 无通知器时正常初始化 |
+| TC-NOTIFY-11 | startup_skips_idle | IDLE 状态跳过初始化 |
+| TC-NOTIFY-12 | exactly_layer3 | 刚好第3层触发 layer3 |
+| TC-NOTIFY-13 | exactly_100_percent | 刚好 100% 只触发 completed |
+| TC-NOTIFY-14 | multiple_printers_independent | 多台打印机独立追踪 |
+| TC-NOTIFY-15 | layer3_then_completed | 同一任务 layer3→completed 都触发 |
+| TC-NOTIFY-16 | non_running_skips | 非 RUNNING 状态跳过进度事件 |
+| TC-NOTIFY-17 | wecom_deduplicates_layer3 | WeComNotifier 层对 layer3 去重 |
+| TC-NOTIFY-18 | wecom_deduplicates_completed | WeComNotifier 层对 completed 去重 |
+| TC-NOTIFY-19 | wecom_new_job_resets_layer3 | 新任务重置 wecom 层 layer3_sent |
+| TC-NOTIFY-20 | queue_full_drops | WeComNotifier 层队列满丢弃 |
+| TC-NOTIFY-21 | disabled_event_no_queue | 禁用的通知类型不入队 |
+| TC-NOTIFY-22 | unknown_printer_ignored | 未知打印机不崩溃 |
+| TC-NOTIFY-23 | reset_if_new_job | reset_if_new_job 正确重置所有标记 |
+| TC-NOTIFY-24 | full_flow_gcode_change | handle_status_update 完整流程 |
+| TC-NOTIFY-25 | both_layers_prevent_duplicate | Monitor + WeCom 双层去重 |
+| TC-NOTIFY-26 | startup_syncs_wecom_above | 启动时同步 WeCom 状态（> 第3层） |
+| TC-NOTIFY-27 | startup_syncs_wecom_below | 启动时同步 WeCom 状态（< 第3层） |
+| TC-NOTIFY-28 | above_layer3_no_trigger | > 第3层不触发 layer3 |
+| TC-NOTIFY-29 | hms_error_triggers | HMS 错误触发 error 通知 |
+| TC-NOTIFY-30 | same_hms_error_not_duplicated | 同一 HMS 错误不重复通知 |
+| TC-NOTIFY-31 | multiple_hms_errors_merged | 多个 HMS 错误合并为一条 |
+| TC-NOTIFY-32 | new_job_resets_hms | 新任务开始时 HMS 错误状态重置 |
+| TC-NOTIFY-33 | warning_not_notified | severity=warning 不触发通知 |
+| TC-NOTIFY-34 | error_disabled_in_config | error=false 时不发送 |
+| TC-NOTIFY-35 | multiple_printers_hms_independent | 多台打印机 HMS 独立追踪 |
 
 ### 6.3 测试配置
 
@@ -540,7 +614,7 @@ testpaths = ["tests"]
 ### 6.4 运行方式
 
 ```bash
-# 全量测试 (128 tests)
+# 全量测试 (163 tests)
 python -m pytest tests/ -v
 
 # 核心模块 + 覆盖率
@@ -548,7 +622,7 @@ python -m pytest tests/test_database.py tests/test_monitor.py tests/test_numeric
     --cov=bumbo_stats.database --cov=bumbo_stats.printer.monitor \
     --cov-report=term-missing
 
-# 预期结果: 128 passed, database.py 100%, monitor.py 100%
+# 预期结果: 163 passed, database.py 100%, monitor.py 100%
 ```
 
 ---
@@ -575,6 +649,14 @@ settings:                          # 全局设置（可选）
   db_path: "./data/bumbo_stats.db"
   host: "0.0.0.0"
   port: 8000
+
+wecom:                            # 企业微信通知（可选）
+  bot_id: "xxxx"                 # 机器人 Bot ID
+  secret: "xxxx"                 # 机器人 Secret
+  chatid: ""                     # 群聊 chatid（留空自动发现）
+  layer3: true                   # 第3层通知
+  completed: true                 # 完成通知
+  error: true                    # HMS 错误通知（v0.4.0 新增）
 ```
 
 ### 启动命令
@@ -630,7 +712,7 @@ schtasks /create /tn "BumboStats" /tr "H:\QoderWorkspace\bumbo_stats\start_servi
 
 ### 9.3 当前状态
 
-- **功能完整**: 实时监控、产能统计、摄像头、历史记录、WebSocket 推送全部就绪
-- **生产可用**: 128 个测试通过，核心模块 100% 覆盖，支持开机自启动常驻运行
+- **功能完整**: 实时监控、产能统计、摄像头、历史记录、WebSocket 推送、HMS 错误通知全部就绪
+- **生产可用**: 163 个测试通过，核心模块 100% 覆盖，支持开机自启动常驻运行
 - **已知局限**: 历史打印记录仅覆盖服务运行期间，X1 摄像头不支持，服务中断期间数据丢失
 - **扩展方向**: 可增加多打印机队列管理、打印任务自动排程、历史数据可视化增强等高级功能
