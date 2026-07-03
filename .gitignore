@@ -36,3 +36,6 @@ Thumbs.db
 
 # Node (if any frontend)
 node_modules/
+start_service.bat
+bumbo_stats/IDEA.md
+register_autostart.ps1
