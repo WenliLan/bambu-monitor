@@ -157,6 +157,19 @@ class PrintMonitor:
         if not self.wecom_notifier:
             return
 
+        # HMS 错误检测（任何状态都可能发生，与 RUNNING 独立）
+        if status.hms_errors:
+            error_events = [e for e in status.hms_errors if e.severity == "error"]
+            if error_events:
+                gcode = status.gcode_file or ""
+                logger.info(
+                    "触发HMS错误通知: %s errors=%s file=%s",
+                    serial,
+                    [(e.code, e.message) for e in error_events],
+                    gcode,
+                )
+                self.wecom_notifier.notify(serial, "error", status, error_events)
+
         if status.state != PrinterState.RUNNING:
             return
 
@@ -181,25 +194,15 @@ class PrintMonitor:
             )
             self.wecom_notifier.notify(serial, "layer3", status)
 
-        # 事件2：进度100%（只要progress>=100就触发）
+        # 事件2：进度100%（只要 progress>=100 就触发）
+        # 注意：RUNNING→FINISH 时 state 已变为 FINISH，_check_progress_events
+        # 不会进入此分支，completed 通知由 _handle_state_change 在检测到 FINISH 时触发
         if status.progress >= 100:
             logger.info(
                 "触发100%%通知: %s progress=%d file=%s",
                 serial, status.progress, gcode,
             )
             self.wecom_notifier.notify(serial, "completed", status)
-
-        # 事件3：HMS 错误（多个错误合并为一条通知）
-        if status.hms_errors and self.wecom_notifier:
-            error_events = [e for e in status.hms_errors if e.severity == "error"]
-            if error_events:
-                logger.info(
-                    "触发HMS错误通知: %s errors=%s file=%s",
-                    serial,
-                    [(e.code, e.message) for e in error_events],
-                    gcode,
-                )
-                self.wecom_notifier.notify(serial, "error", status, error_events)
 
     async def _handle_state_change(self, serial: str, status: PrinterStatus):
         """处理状态变更事件（打印开始/结束检测）"""
@@ -242,6 +245,9 @@ class PrintMonitor:
             PrinterState.RUNNING, PrinterState.PAUSE,
         ):
             await self.db.record_print_start(serial, status.gcode_file)
+            # 重置 completed_sent，允许新任务再次触发 completed 通知
+            if self.wecom_notifier and serial in self.wecom_notifier._states:
+                self.wecom_notifier._states[serial].completed_sent = False
 
         # 检测打印结束（PAUSE 不结束 session，打印仍在进行中）
         elif prev_state == PrinterState.RUNNING and curr_state in (
@@ -251,6 +257,13 @@ class PrintMonitor:
                 PrinterState.FINISH, PrinterState.IDLE,
             ) else "failed"
             await self.db.record_print_end(serial, end_status)
+            # 触发 completed 通知（_check_progress_events 在 FINISH 时不会进入）
+            if self.wecom_notifier and curr_state == PrinterState.FINISH:
+                logger.info(
+                    "触发完成通知: %s file=%s",
+                    serial, status.gcode_file,
+                )
+                self.wecom_notifier.notify(serial, "completed", status)
 
         self._last_states[serial] = curr_state
         self._last_gcode[serial] = status.gcode_file

@@ -944,3 +944,87 @@ class TestHMSErrorNotification:
         mon._check_progress_events("S002", s2)
 
         assert wecom._queue.qsize() == 2
+
+    async def test_tc_notify_36_finish_triggers_completed_notification(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-36: RUNNING→FINISH 状态变更时触发 completed 通知
+
+        修复场景：打印机从 RUNNING→FINISH 时，_check_progress_events 因 state!=RUNNING 跳过，
+        因此 _handle_state_change 在检测到 FINISH 时直接触发 completed 通知。
+        """
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+
+        # 先设置初始状态 RUNNING（模拟正在打印）
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job1.gcode"
+
+        # 状态变更为 FINISH（RUNNING→FINISH 触发 _handle_state_change 中的 completed 通知）
+        s = _make_status("S001", PrinterState.FINISH, "job1.gcode",
+                          current_layer=80, total_layers=80, progress=100)
+        await mon._handle_state_change("S001", s)
+        assert wecom._queue.qsize() == 1
+
+    async def test_tc_notify_37_new_job_resets_completed_sent(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-37: 新打印任务开始时重置 completed_sent
+
+        修复场景：job1.gcode 完成 → job2.gcode 开始，
+        都需要能再次触发 completed 通知。
+        """
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+
+        # job1 第一次完成
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job1.gcode"
+        s1 = _make_status("S001", PrinterState.RUNNING, "job1.gcode",
+                          current_layer=100, total_layers=100, progress=100)
+        mon._check_progress_events("S001", s1)
+        assert wecom._queue.qsize() == 1
+
+        # job2 开始（RUNNING 状态变化，且 _handle_state_change 会重置 completed_sent）
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job1.gcode"
+        s2 = _make_status("S001", PrinterState.RUNNING, "job2.gcode",
+                          current_layer=1, total_layers=100, progress=1)
+        await mon._handle_state_change("S001", s2)
+
+        # job2 完成，能再次触发 completed
+        s3 = _make_status("S001", PrinterState.RUNNING, "job2.gcode",
+                          current_layer=100, total_layers=100, progress=100)
+        mon._check_progress_events("S001", s3)
+        assert wecom._queue.qsize() == 2
+
+    async def test_tc_notify_38_hms_errors_any_state_triggers(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-38: HMS 错误在任何状态都能触发（不限于 RUNNING）
+
+        HMS 错误检测独立于 state!=RUNNING 的检查，任何状态下的错误都能被捕获。
+        """
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        # IDLE 状态下有 HMS 错误，也能触发
+        s = _make_status("S001", PrinterState.IDLE, "job.gcode",
+                         current_layer=0, hms_errors=[
+                             HMSError(code=0x0B01, severity="error", message="堵嘴检测"),
+                         ])
+        mon._check_progress_events("S001", s)
+        assert wecom._queue.qsize() == 1
+        item = await wecom._queue.get()
+        assert item["event"] == EVENT_ERROR
