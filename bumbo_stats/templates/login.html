@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}登录 - Bumbo Stats{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <h2>🔐 请输入管理员密码</h2>
+        <p class="auth-hint">输入您之前设置的密码</p>
+        <form id="login-form" class="auth-form">
+            <input
+                type="password"
+                name="password"
+                id="password"
+                placeholder="请输入密码"
+                required
+                autofocus
+            >
+            <button type="submit">登录</button>
+        </form>
+        <p class="auth-error" id="error-msg" style="display:none"></p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const form = document.getElementById('login-form');
+const errorMsg = document.getElementById('error-msg');
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorMsg.style.display = 'none';
+    const password = document.getElementById('password').value;
+
+    const resp = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password})
+    });
+
+    if (resp.ok) {
+        location.href = '/settings';
+    } else {
+        const data = await resp.json();
+        errorMsg.textContent = data.detail || '密码错误';
+        errorMsg.style.display = 'block';
+    }
+});
+</script>
+{% endblock %}

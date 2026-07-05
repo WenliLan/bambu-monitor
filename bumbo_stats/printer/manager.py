@@ -55,6 +55,63 @@ class PrinterManager:
     def get_config(self, serial: str) -> Optional[PrinterConfig]:
         return self._configs.get(serial)
 
+    async def add_printer(self, config: PrinterConfig):
+        """动态添加一台打印机（运行时重载用）
+
+        Args:
+            config: 打印机配置
+        """
+        if config.serial in self._configs:
+            logger.info("打印机已存在，跳过添加: %s", config.serial)
+            return
+
+        self._configs[config.serial] = config
+        logger.info("已添加打印机配置: %s (%s)", config.name, config.serial)
+
+        # 如果已有 MQTT 连接，建立新连接
+        if self._uid and self._token:
+            from bambulab import MQTTClient
+            if self._region == "china":
+                MQTTClient.BROKER = "cn.mqtt.bambulab.com"
+            else:
+                MQTTClient.BROKER = "us.mqtt.bambulab.com"
+            try:
+                mqtt = MQTTClient(
+                    username=self._uid,
+                    access_token=self._token,
+                    device_id=config.serial,
+                    on_message=self._make_callback(config.serial),
+                )
+                await asyncio.to_thread(mqtt.connect, blocking=False)
+                self._mqtt_clients[config.serial] = mqtt
+                await asyncio.to_thread(mqtt.request_full_status)
+                logger.info("MQTT 已连接: %s", config.serial)
+            except Exception as e:
+                logger.error("MQTT 连接失败 %s: %s", config.serial, e)
+
+    async def remove_printer(self, serial: str):
+        """动态移除一台打印机（运行时重载用）
+
+        Args:
+            serial: 打印机序列号
+        """
+        if serial not in self._configs:
+            return
+
+        # 断开 MQTT
+        if serial in self._mqtt_clients:
+            try:
+                await asyncio.to_thread(self._mqtt_clients[serial].disconnect)
+            except Exception as e:
+                logger.warning("断开 MQTT 失败 %s: %s", serial, e)
+            del self._mqtt_clients[serial]
+
+        # 清理缓存
+        self._configs.pop(serial, None)
+        self._status_cache.pop(serial, None)
+        self._print_data_cache.pop(serial, None)
+        logger.info("已移除打印机: %s", serial)
+
     async def connect_all(self, uid: str, token: str, region: str = "global"):
         """连接所有打印机的云端 MQTT
 

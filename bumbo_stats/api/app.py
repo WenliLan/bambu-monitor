@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..models import PrinterState
 from ..auth import TokenManager
-from ..config import AppConfig, load_config
+from ..config import AppConfig, PrinterConfig, load_config
 from ..database import Database
 from ..printer.camera import CameraManager
 from ..printer.manager import PrinterManager
@@ -29,6 +29,10 @@ _reconnect_task: asyncio.Task | None = None
 _wecom_notifier: WeComNotifier | None = None
 _ws_manager: ConnectionManager = ConnectionManager()
 
+# 运行时重载函数（在 create_app 中注册到 app.state）
+_reload_printers_fn = None
+_reload_wecom_fn = None
+
 
 async def _broadcast(message: dict):
     """广播回调，转发到 WebSocket 连接管理器"""
@@ -36,12 +40,7 @@ async def _broadcast(message: dict):
 
 
 async def _reconnect_loop(manager: PrinterManager, interval: float = 60.0):
-    """定期检查并重连断开的 MQTT 客户端
-
-    Args:
-        manager: 打印机管理器
-        interval: 检查间隔（秒）
-    """
+    """定期检查并重连断开的 MQTT 客户端"""
     while True:
         try:
             await asyncio.sleep(interval)
@@ -52,13 +51,64 @@ async def _reconnect_loop(manager: PrinterManager, interval: float = 60.0):
             logger.error("重连检查异常: %s", e)
 
 
+async def _reload_printers_impl(new_printers: list[PrinterConfig]):
+    """运行时重载打印机配置"""
+    global _reload_printers_fn
+    manager = None
+    for attr in ["_manager"]:
+        if hasattr(router, "_app") and hasattr(router._app.state, attr):
+            manager = getattr(router._app.state, attr)
+            break
+    if not manager:
+        logger.warning("无法获取 manager 实例")
+        return
+
+    old_serials = set(manager.serials)
+    new_serials = {p.serial for p in new_printers}
+
+    # 移除不存在的打印机
+    for serial in old_serials - new_serials:
+        manager.remove_printer(serial)
+        logger.info("已移除打印机: %s", serial)
+
+    # 添加新打印机
+    for printer in new_printers:
+        if printer.serial in new_serials - old_serials:
+            manager.add_printer(printer)
+            logger.info("已添加打印机: %s (%s)", printer.name, printer.serial)
+
+
+async def _reload_wecom_impl(new_wecom: WeComConfig):
+    """运行时重载企业微信配置"""
+    global _reload_wecom_fn
+    wecom = None
+    for attr in ["_wecom_notifier"]:
+        if hasattr(router, "_app") and hasattr(router._app.state, attr):
+            wecom = getattr(router._app.state, attr)
+            break
+    if not wecom:
+        logger.warning("无法获取 wecom_notifier 实例")
+        return
+
+    # 更新配置
+    wecom._cfg = new_wecom
+    logger.info("企业微信配置已重载: layer3=%s completed=%s error=%s",
+                new_wecom.layer3, new_wecom.completed, new_wecom.error)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动/停止后台任务"""
-    global _monitor_task, _camera_task, _reconnect_task
+    global _monitor_task, _camera_task, _reconnect_task, _wecom_notifier
+    global _reload_printers_fn, _reload_wecom_fn
 
     config: AppConfig = app.state.config
     _started_internally = False
+
+    # 注册重载函数到 app.state（供 routes.py 中的 API 调用）
+    app.state._reload_printers = _reload_printers_impl
+    app.state._reload_wecom = _reload_wecom_impl
+    router._app = app  # 供重载函数访问 app
 
     # 如果测试已注入 mock 对象，跳过初始化
     if not hasattr(app.state, "db") or app.state.db is None:
@@ -77,7 +127,6 @@ async def lifespan(app: FastAPI):
 
         # 2. 获取用户 ID（从云端 API）
         from bambulab import BambuClient
-        # 设置正确的 API URL（China 或 Global）
         BambuClient.BASE_URL = "https://api.bambulab.cn" if region == "china" else "https://api.bambu.com"
         client = BambuClient(token=token)
         user_info = await asyncio.to_thread(client.get_user_info)
@@ -98,6 +147,7 @@ async def lifespan(app: FastAPI):
         # 5. 连接云端 MQTT
         await manager.connect_all(uid, token, region=region)
         app.state.printer_manager = manager
+        app.state._manager = manager
 
         # 6. 注册打印机到数据库（通过云端 API 获取设备信息）
         try:
@@ -109,7 +159,6 @@ async def lifespan(app: FastAPI):
             logger.warning("获取设备列表失败: %s", e)
             device_map = {}
 
-        # 获取当前打印任务名称和状态（用于填充显示）
         task_names = {}
         print_states = {}
         for device in devices or []:
@@ -133,7 +182,6 @@ async def lifespan(app: FastAPI):
             model = device.get("dev_model_name", "")
             await db.upsert_printer(c.serial, c.name, c.ip or "", model, c.location)
 
-        # 填充初始任务名称和状态到 manager
         for serial in task_names.keys() | print_states.keys():
             if serial in manager._configs:
                 initial_data = {}
@@ -145,7 +193,6 @@ async def lifespan(app: FastAPI):
                 manager._status_cache[serial] = status
                 manager._print_data_cache[serial] = initial_data
 
-        # 初始化 monitor._last_states 并补录正在打印的任务
         for serial, status in manager._status_cache.items():
             monitor._last_states[serial] = status.state
             monitor._last_gcode[serial] = status.gcode_file
@@ -156,6 +203,7 @@ async def lifespan(app: FastAPI):
         # 7. 初始化摄像头管理器
         camera = CameraManager(config.printers)
         app.state.camera_manager = camera
+        app.state._camera = camera
 
         # 8. 初始化企业微信通知模块（可选）
         global _wecom_notifier
@@ -167,12 +215,14 @@ async def lifespan(app: FastAPI):
                     chatid=config.wecom.chatid,
                     layer3=config.wecom.layer3,
                     completed=config.wecom.completed,
+                    error=config.wecom.error,
                 ),
                 printer_configs=config.printers,
                 camera_manager=camera,
             )
             await _wecom_notifier.start()
             monitor.wecom_notifier = _wecom_notifier
+            app.state._wecom_notifier = _wecom_notifier
             logger.info("企业微信通知模块已启用")
 
         # 9. 启动后台任务
@@ -186,8 +236,6 @@ async def lifespan(app: FastAPI):
 
     # 清理（仅关闭内部启动的资源）
     if _started_internally:
-        if hasattr(app.state, "printer_manager"):
-            monitor = None  # monitor 引用已在 start 中
         if _monitor_task:
             _monitor_task.cancel()
         if _camera_task:
@@ -212,36 +260,30 @@ def create_app(config: AppConfig | None = None, config_path: str = "printers.yam
     app = FastAPI(
         title="Bumbo Stats",
         description="拓竹3D打印机多机云端监控面板",
-        version="0.3.0",
+        version="0.5.0",
         lifespan=lifespan,
     )
 
-    # 保存配置到 app.state
     app.state.config = config
     app.state.ws_manager = _ws_manager
 
-    # 静态文件和模板
     pkg_dir = Path(__file__).parent.parent
     templates_dir = pkg_dir / "templates"
     static_dir = pkg_dir / "static"
 
     if templates_dir.exists():
-        templates = Jinja2Templates(directory=str(templates_dir))
-        app.state.templates = templates
+        app.state.templates = Jinja2Templates(directory=str(templates_dir))
 
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
-    # 注册路由
     app.include_router(router)
 
-    # WebSocket 端点
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket):
         await _ws_manager.connect(websocket)
         try:
             while True:
-                # 保持连接，接收客户端心跳
                 await websocket.receive_text()
         except WebSocketDisconnect:
             await _ws_manager.disconnect(websocket)

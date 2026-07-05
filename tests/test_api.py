@@ -16,7 +16,7 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
-from bumbo_stats.config import AppConfig, PrinterConfig, AppSettings, CloudConfig
+from bumbo_stats.config import AppConfig, PrinterConfig, AppSettings, CloudConfig, UiSettings
 from bumbo_stats.models import PrinterStatus, PrinterState, TodayUsageItem, MonthlyUsage, MonthlyUsagePoint
 
 
@@ -133,3 +133,142 @@ class TestUsageRoutes:
         resp = client.get("/api/sessions/S001")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
+
+
+class TestSettingsRoutes:
+    """设置页面和 API 测试"""
+    AUTH_COOKIE = "bumbo_auth"
+
+    def _set_auth(self, client, password="admin"):
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password(password)
+        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
+
+    def test_tc_api_08_settings_page_requires_auth(self, client):
+        """TC-API-08: 未登录访问 /settings 显示登录页"""
+        resp = client.get("/settings")
+        assert resp.status_code == 200
+        # 未登录时应显示登录表单（页面包含 password 输入框）
+        assert "password" in resp.text.lower()
+
+    def test_tc_api_09_login_wrong_password(self, client):
+        """TC-API-09: 登录密码错误返回 401"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("right")
+        resp = client.post("/api/auth/login", json={"password": "wrong"})
+        assert resp.status_code == 401
+
+    def test_tc_api_10_login_correct_password(self, client):
+        """TC-API-10: 正确密码登录设置 cookie"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("testpw")
+        resp = client.post("/api/auth/login", json={"password": "testpw"})
+        assert resp.status_code == 200
+        assert self.AUTH_COOKIE in resp.cookies
+
+    def test_tc_api_11_settings_page_with_auth(self, client):
+        """TC-API-11: 登录后访问设置页面显示配置"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("testpw")
+        cfg.cloud.username = "test@example.com"
+        client.post("/api/auth/login", json={"password": "testpw"})
+        resp = client.get("/settings")
+        assert resp.status_code == 200
+        assert "test@example.com" in resp.text
+
+    def test_tc_api_12_save_cloud_config(self, client):
+        """TC-API-12: 保存云端配置"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("admin")
+        cfg.cloud.username = "old@example.com"
+        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
+        resp = client.post("/api/settings/cloud", json={
+            "username": "new@example.com",
+            "token_file": "~/.bumbo_token",
+            "mqtt_broker": "cn",
+        })
+        assert resp.status_code == 200
+        assert cfg.cloud.username == "new@example.com"
+
+    def test_tc_api_13_save_printers_config(self, client):
+        """TC-API-13: 保存打印机配置"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("admin")
+        cfg._reload_printers = AsyncMock()
+        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
+        resp = client.post("/api/settings/printers", json={
+            "printers": [
+                {"name": "P1", "serial": "S002", "ip": "1.2.3.4",
+                 "access_code": "0000", "location": "客厅"},
+            ],
+        })
+        assert resp.status_code == 200
+        assert len(cfg.printers) == 1
+        assert cfg.printers[0].serial == "S002"
+
+    def test_tc_api_14_save_wecom_config(self, client):
+        """TC-API-14: 保存企业微信配置"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("admin")
+        cfg._reload_wecom = AsyncMock()
+        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
+        resp = client.post("/api/settings/wecom", json={
+            "bot_id": "bot123",
+            "secret": "secret456",
+            "chatid": "chat789",
+            "layer3": True,
+            "completed": True,
+            "error": False,
+        })
+        assert resp.status_code == 200
+        assert cfg.wecom.bot_id == "bot123"
+        assert cfg.wecom.error is False
+
+    def test_tc_api_15_change_password(self, client):
+        """TC-API-15: 修改管理员密码"""
+        cfg = client.app.state.config
+        old_hash = cfg.hash_password("oldpw")
+        cfg.ui.admin_password_hash = old_hash
+        client.cookies.set(self.AUTH_COOKIE, old_hash)
+        resp = client.post("/api/settings/password", json={"password": "newpw"})
+        assert resp.status_code == 200
+        assert cfg.ui.admin_password_hash == cfg.hash_password("newpw")
+
+    def test_tc_api_16_logout(self, client):
+        """TC-API-16: 退出登录删除 cookie"""
+        resp = client.post("/api/auth/logout")
+        assert resp.status_code == 200
+
+    def test_tc_api_17_unauthenticated_api_returns_401(self, client):
+        """TC-API-17: 未登录调用 settings API 返回 401"""
+        # 使用有效数据，但不带认证 cookie
+        test_cases = [
+            ("/api/settings/cloud", {"username": "test@test.com"}),
+            ("/api/settings/printers", {"printers": []}),
+            ("/api/settings/wecom", {"bot_id": "test", "secret": "test"}),
+            ("/api/settings/password", {"password": "newpass"}),
+        ]
+        for url, json_data in test_cases:
+            resp = client.post(url, json=json_data)
+            assert resp.status_code == 401, f"{url} returned {resp.status_code}"
+
+    def test_tc_api_18_setup_first_password(self, client):
+        """TC-API-18: 首次设置密码"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = ""  # 未设置过密码
+        resp = client.post("/api/auth/setup", json={"password": "newadmin"})
+        assert resp.status_code == 200
+        assert cfg.ui.admin_password_hash == cfg.hash_password("newadmin")
+
+    def test_tc_api_19_printers_reload_called(self, client):
+        """TC-API-19: 保存打印机后调用重载函数"""
+        cfg = client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("admin")
+        # _reload_printers 应该在 app.state 上（与 routes.py 中一致）
+        reload_mock = AsyncMock()
+        client.app.state._reload_printers = reload_mock
+        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
+        resp = client.post("/api/settings/printers", json={
+            "printers": [{"name": "P1", "serial": "X001", "ip": "", "access_code": "", "location": ""}],
+        })
+        reload_mock.assert_called_once()

@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}设置管理员密码 - Bumbo Stats{% endblock %}
+
+{% block content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <h2>🔐 设置管理员密码</h2>
+        <p class="auth-hint">首次使用，请设置管理员密码（至少 4 位）</p>
+        <form id="setup-form" class="auth-form">
+            <input
+                type="password"
+                name="password"
+                id="password"
+                placeholder="请输入密码（至少4位）"
+                minlength="4"
+                required
+                autofocus
+            >
+            <input
+                type="password"
+                name="password2"
+                id="password2"
+                placeholder="确认密码"
+                minlength="4"
+                required
+            >
+            <button type="submit">设置密码并进入</button>
+        </form>
+        <p class="auth-error" id="error-msg" style="display:none"></p>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const form = document.getElementById('setup-form');
+const errorMsg = document.getElementById('error-msg');
+
+form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorMsg.style.display = 'none';
+    const pw1 = document.getElementById('password').value;
+    const pw2 = document.getElementById('password2').value;
+
+    if (pw1 !== pw2) {
+        errorMsg.textContent = '两次密码不一致';
+        errorMsg.style.display = 'block';
+        return;
+    }
+
+    const resp = await fetch('/api/auth/setup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({password: pw1})
+    });
+
+    if (resp.ok) {
+        location.href = '/settings';
+    } else {
+        const data = await resp.json();
+        errorMsg.textContent = data.detail || '设置失败';
+        errorMsg.style.display = 'block';
+    }
+});
+</script>
+{% endblock %}

@@ -1,5 +1,6 @@
 """配置加载模块 - 从 YAML 文件加载打印机和全局设置"""
 
+import hashlib
 from pathlib import Path
 from typing import Optional
 
@@ -41,12 +42,45 @@ class WeComSettings(BaseModel):
     error: bool = Field(default=True, description="HMS 错误时发送通知")
 
 
+class UiSettings(BaseModel):
+    """UI 层面设置"""
+    admin_password_hash: str = Field(default="", description="管理员密码 SHA256 哈希")
+
+
 class AppConfig(BaseModel):
     """应用完整配置"""
     cloud: CloudConfig
     printers: list[PrinterConfig]
     settings: AppSettings = Field(default_factory=AppSettings)
     wecom: WeComSettings = Field(default_factory=WeComSettings)
+    ui: UiSettings = Field(default_factory=UiSettings)
+
+    def save_yaml(self, path: str = "printers.yaml"):
+        """将当前配置保存到 YAML 文件"""
+        data = {
+            "cloud": self.cloud.model_dump(),
+            "printers": [p.model_dump() for p in self.printers],
+            "settings": self.settings.model_dump(),
+            "wecom": self.wecom.model_dump(),
+            "ui": self.ui.model_dump(),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            yaml.dump(data, f, allow_unicode=True, sort_keys=False)
+
+    @staticmethod
+    def hash_password(password: str) -> str:
+        """对密码进行 SHA256 哈希"""
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def verify_password(self, password: str) -> bool:
+        """验证密码是否正确"""
+        if not self.ui.admin_password_hash:
+            return False
+        return self.ui.admin_password_hash == self.hash_password(password)
+
+    def set_password(self, password: str):
+        """设置管理员密码"""
+        self.ui.admin_password_hash = self.hash_password(password)
 
 
 def load_config(config_path: str = "printers.yaml") -> AppConfig:
@@ -82,5 +116,6 @@ def load_config(config_path: str = "printers.yaml") -> AppConfig:
     printers = [PrinterConfig(**p) for p in data["printers"]]
     settings = AppSettings(**data.get("settings", {}))
     wecom = WeComSettings(**data.get("wecom", {}))
+    ui = UiSettings(**data.get("ui", {}))
 
-    return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom)
+    return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom, ui=ui)
