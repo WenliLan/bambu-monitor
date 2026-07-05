@@ -457,7 +457,7 @@ start_service.bat:
 
 ---
 
-## 六、测试方案（163 个测试，100% 覆盖）
+## 六、测试方案（194 个测试，100% 覆盖）
 
 ### 6.1 覆盖率
 
@@ -467,7 +467,7 @@ start_service.bat:
 | `monitor.py` | 73 | **100%** |
 | **合计** | 224 | **100%** |
 
-**测试总数**: 163 个（原有 128 + 新增 35 企业微信通知测试）
+**测试总数**: 194 个（原有 194 + 新增安全测试 16）
 
 ### 6.2 测试矩阵
 
@@ -569,23 +569,24 @@ start_service.bat:
 | TC-NV-27 | snapshot_no_sessions | **无 session 日期: 不创建记录** |
 | TC-NV-28 | monthly_date_sequence | **月度日期序列严格连续递增** |
 
-#### 其他模块 (49 tests)
+#### 其他模块 (57 tests)
 
 | 测试文件 | 数量 | 覆盖范围 |
 |----------|:---:|---------|
-| test_api.py | 7 | 全部 REST 端点（Dashboard/打印机/产能/摄像头/历史） |
+| test_api.py | 19 | REST 端点 + 设置页面认证、配置保存 |
 | test_auth.py | 5 | Token 存取、文件不存在、空文件、路径展开 |
 | test_camera.py | 4 | X1 不支持、P1S/A1 支持、无 IP、帧缓存 |
 | test_cli.py | 4 | 版本号、缺配置退出、参数解析 |
 | test_config.py | 8 | 完整/最小/不存在/缺字段配置、模型默认值 |
 | test_manager.py | 6 | 初始化、属性、OFFLINE 默认、MQTT 解析 |
 | test_models.py | 8 | 枚举、默认值、序列化、所有模型结构 |
+| test_settings_security.py | 16 | 密码哈希、Cookie安全、认证流程 |
 | test_templates.py | 3 | CDN 引用、页面区域、循环渲染 |
 | test_websocket.py | 3 | 连接/断开、广播、失败移除 |
-| test_wecom_notify.py | 35 | layer3/completed 去重、启动扫描、边界条件、HMS 错误通知 |
+| test_wecom_notify.py | 38 | layer3/completed 去重、启动扫描、边界条件、HMS 错误通知 |
 | test_core.py | 1 | 占位 |
 
-#### 企业微信通知层 (test_wecom_notify.py — 35 tests, 含 HMS)
+#### 企业微信通知层 (test_wecom_notify.py — 38 tests, 含 HMS)
 
 | ID | 测试名 | 场景 |
 |---|--------|------|
