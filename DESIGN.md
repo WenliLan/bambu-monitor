@@ -86,6 +86,33 @@ Bumbo Stats 是一个**拓竹 (Bambu Lab) 3D 打印机多机云端监控面板**
 - 同错误码不重复通知（新任务开始后重置）
 - 每台打印机独立追踪，互不干扰
 
+#### FR-09: Web 设置界面
+- 管理员密码保护：首次访问强制设置密码（SHA256 哈希存储）
+- 拓竹云账号配置：修改用户名、Token 路径、服务器区域
+- 打印机管理：添加/删除/编辑打印机（序列号不可修改）
+- 企业微信配置：Bot ID、Secret、Chat ID、通知开关
+- 运行时重载：保存配置后自动重载打印机和企业微信设置
+- Session 管理：HttpOnly + SameSite=Lax Cookie 认证
+
+#### FR-10: 安全认证
+- 密码 SHA256 哈希存储（不可逆）
+- Cookie 使用 HttpOnly + SameSite=Lax 防止 XSS 和 CSRF
+- 所有设置 API 需要认证，未登录返回 401
+- 登录失败不泄露哈希值
+- 改密后旧 Session 失效
+
+### 2.3 设置 API 路由
+
+| 路由 | 方法 | 说明 | 认证 |
+|------|------|------|------|
+| `/api/auth/login` | POST | 登录验证 | 否 |
+| `/api/auth/logout` | POST | 登出 | 否 |
+| `/api/auth/setup` | POST | 首次设置密码 | 否 |
+| `/api/settings/cloud` | POST | 保存拓竹云配置 | 是 |
+| `/api/settings/printers` | POST | 保存打印机配置 | 是 |
+| `/api/settings/wecom` | POST | 保存企业微信配置 | 是 |
+| `/api/settings/password` | POST | 修改密码 | 是 |
+
 ### 2.2 非功能需求
 
 | 编号 | 需求 | 说明 |
@@ -132,7 +159,10 @@ bumbo_stats/
 │   │
 │   ├── templates/                      # Jinja2 模板
 │   │   ├── base.html                   # 基础模板（CDN + 导航栏）
-│   │   └── dashboard.html              # 主面板页面
+│   │   ├── dashboard.html              # 主面板页面
+│   │   ├── login.html                  # 登录页面
+│   │   ├── setup.html                  # 首次设置密码页面
+│   │   └── settings.html                # 系统设置页面
 │   │
 │   └── static/                         # 静态资源
 │       ├── css/dashboard.css           # 暗色主题样式
@@ -142,9 +172,9 @@ bumbo_stats/
 │           ├── charts.js               # Chart.js 月度折线图
 │           └── camera.js               # 摄像头定时刷新
 │
-├── tests/                              # 测试包（163 个测试）
+├── tests/                              # 测试包（210 个测试）
 │   ├── conftest.py                     # 共享 fixtures
-│   ├── test_api.py                     # API 路由 (7)
+│   ├── test_api.py                     # API 路由 (19)
 │   ├── test_auth.py                    # 认证 (5)
 │   ├── test_camera.py                  # 摄像头 (4)
 │   ├── test_cli.py                     # CLI (4)
@@ -155,9 +185,10 @@ bumbo_stats/
 │   ├── test_models.py                  # 模型 (8)
 │   ├── test_monitor.py                 # 监控器 (22)
 │   ├── test_numerical.py               # 精确数值验证 (31)
+│   ├── test_settings_security.py        # 安全测试 (16)
 │   ├── test_templates.py               # 模板 (3)
 │   ├── test_websocket.py               # WebSocket (3)
-│   └── test_wecom_notify.py            # 企业微信通知 (35)
+│   └── test_wecom_notify.py            # 企业微信通知 (38)
 │
 └── data/                               # 运行时数据
     └── bumbo_stats.db                  # SQLite 数据库文件
@@ -181,9 +212,9 @@ bumbo_stats/
    ├─ _handle_state_change()          ├─ /api/printers     (缓存直读)
    │   ├─ 检测打印开始/结束           ├─ /api/usage/today  (DB 实时算)
    │   └─ gcode 文件变化检测          ├─ /api/usage/monthly(快照+今日)
-   ├─ record_print_start/end()        └─ /api/sessions     (DB 历史)
-   ├─ snapshot_yesterday() 每日快照
-   └─ broadcast → ConnectionManager
+   ├─ record_print_start/end()        ├─ /api/sessions     (DB 历史)
+   ├─ snapshot_yesterday() 每日快照   ├─ /api/auth/*       (认证)
+   └─ broadcast → ConnectionManager  └─ /api/settings/*    (配置)
               │
               ▼
         WebSocket → 前端 Dashboard (实时更新)
