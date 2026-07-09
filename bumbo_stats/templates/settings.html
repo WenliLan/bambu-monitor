@@ -11,6 +11,7 @@
         <button class="tab-btn active" data-tab="cloud">📡 拓竹云</button>
         <button class="tab-btn" data-tab="printers">🖨️ 打印机</button>
         <button class="tab-btn" data-tab="wecom">💬 企业微信</button>
+        <button class="tab-btn" data-tab="feishu">🔵 飞书</button>
         <button class="tab-btn" data-tab="password">🔐 密码</button>
     </div>
 
@@ -134,6 +135,63 @@
             </div>
             <div class="btn-group">
                 <button type="submit" class="btn-primary">💾 保存配置</button>
+                <button type="button" class="btn-secondary" id="btn-test-wecom">🧪 发送测试</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 飞书 Tab -->
+    <div class="tab-panel" id="panel-feishu">
+        <form class="settings-form" id="feishu-form">
+            <div class="settings-card">
+                <div class="settings-card-title">🔵 飞书机器人配置</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>启用飞书通知</label>
+                        <label class="checkbox-label" style="margin-top: 8px;">
+                            <input type="checkbox" name="enabled" {% if config.feishu.enabled %}checked{% endif %}>
+                            启用飞书机器人通知
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>App ID</label>
+                        <input name="app_id" value="{{ config.feishu.app_id }}" placeholder="飞书应用 App ID">
+                    </div>
+                    <div class="form-group">
+                        <label>App Secret</label>
+                        <input type="password" name="app_secret" value="{{ config.feishu.app_secret }}" placeholder="飞书应用 App Secret">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>群聊 Chat ID</label>
+                        <input name="chatid" value="{{ config.feishu.chatid }}" placeholder="飞书群聊 Chat ID">
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">🔔 通知开关</div>
+                <div class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="layer3" {% if config.feishu.layer3 %}checked{% endif %}>
+                        🖨️ 打印到第 3 层时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="completed" {% if config.feishu.completed %}checked{% endif %}>
+                        ✅ 打印完成时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="error" {% if config.feishu.error %}checked{% endif %}>
+                        🚨 HMS 错误时通知
+                    </label>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button type="submit" class="btn-primary">💾 保存配置</button>
+                <button type="button" class="btn-secondary" id="btn-test-feishu">🧪 发送测试</button>
             </div>
         </form>
     </div>
@@ -221,6 +279,63 @@ document.getElementById('wecom-form').addEventListener('submit', async e => {
         completed: fd.has('completed'),
         error: fd.has('error'),
     });
+});
+
+// 飞书
+document.getElementById('feishu-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await submitForm('/api/settings/feishu', {
+        app_id: fd.get('app_id'),
+        app_secret: fd.get('app_secret'),
+        chatid: fd.get('chatid'),
+        enabled: fd.has('enabled'),
+        layer3: fd.has('layer3'),
+        completed: fd.has('completed'),
+        error: fd.has('error'),
+    });
+});
+
+// 测试按钮 - 企业微信
+document.getElementById('btn-test-wecom')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-test-wecom');
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+    try {
+        const resp = await fetch('/api/settings/wecom/test', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+            showMsg('测试消息发送成功！请查看企业微信群', false);
+        } else {
+            showMsg('发送失败: ' + (data.detail || '未知错误'), true);
+        }
+    } catch (e) {
+        showMsg('发送失败: ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🧪 发送测试';
+    }
+});
+
+// 测试按钮 - 飞书
+document.getElementById('btn-test-feishu')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-test-feishu');
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+    try {
+        const resp = await fetch('/api/settings/feishu/test', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+            showMsg('测试消息发送成功！请查看飞书群', false);
+        } else {
+            showMsg('发送失败: ' + (data.detail || '未知错误'), true);
+        }
+    } catch (e) {
+        showMsg('发送失败: ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🧪 发送测试';
+    }
 });
 
 // 打印机管理

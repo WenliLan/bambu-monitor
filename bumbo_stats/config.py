@@ -42,6 +42,17 @@ class WeComSettings(BaseModel):
     error: bool = Field(default=True, description="HMS 错误时发送通知")
 
 
+class FeishuSettings(BaseModel):
+    """飞书机器人配置"""
+    app_id: str = Field(default="", description="飞书应用 App ID")
+    app_secret: str = Field(default="", description="飞书应用 App Secret")
+    chatid: str = Field(default="", description="群聊 Chat ID")
+    enabled: bool = Field(default=False, description="是否启用飞书通知")
+    layer3: bool = Field(default=True, description="打印到第3层时发送通知")
+    completed: bool = Field(default=True, description="打印完成时发送通知")
+    error: bool = Field(default=True, description="HMS 错误时发送通知")
+
+
 class UiSettings(BaseModel):
     """UI 层面设置"""
     admin_password_hash: str = Field(default="", description="管理员密码 SHA256 哈希")
@@ -53,6 +64,7 @@ class AppConfig(BaseModel):
     printers: list[PrinterConfig]
     settings: AppSettings = Field(default_factory=AppSettings)
     wecom: WeComSettings = Field(default_factory=WeComSettings)
+    feishu: FeishuSettings = Field(default_factory=FeishuSettings)
     ui: UiSettings = Field(default_factory=UiSettings)
 
     def save_yaml(self, path: str = "printers.yaml"):
@@ -62,6 +74,7 @@ class AppConfig(BaseModel):
             "printers": [p.model_dump() for p in self.printers],
             "settings": self.settings.model_dump(),
             "wecom": self.wecom.model_dump(),
+            "feishu": self.feishu.model_dump(),
             "ui": self.ui.model_dump(),
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -116,6 +129,7 @@ def load_config(config_path: str = "printers.yaml") -> AppConfig:
     printers = [PrinterConfig(**p) for p in data["printers"]]
     settings = AppSettings(**data.get("settings", {}))
     wecom = WeComSettings(**data.get("wecom", {}))
+    feishu = FeishuSettings(**data.get("feishu", {}))
     ui = UiSettings(**data.get("ui", {}))
 
-    return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom, ui=ui)
+    return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom, feishu=feishu, ui=ui)

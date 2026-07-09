@@ -97,3 +97,29 @@ class CameraManager:
             True 表示支持摄像头
         """
         return self._supported.get(serial, False)
+
+    def reload_configs(self, configs: list[PrinterConfig]):
+        """重新加载打印机配置（用于运行时更新 access_code 等）
+
+        Args:
+            configs: 新的打印机配置列表
+        """
+        old_serials = set(self._configs.keys())
+        new_configs = {c.serial: c for c in configs}
+
+        # 更新配置
+        self._configs.update(new_configs)
+
+        # 移除不存在的打印机
+        for serial in old_serials - set(new_configs.keys()):
+            self._configs.pop(serial, None)
+            self._frame_cache.pop(serial, None)
+            self._supported.pop(serial, None)
+
+        # 重新判断支持状态
+        for c in configs:
+            has_camera = bool(c.ip and c.access_code)
+            serial_prefix = c.serial[:7] if c.serial else ""
+            self._supported[c.serial] = has_camera and serial_prefix not in _X1_PREFIXES
+
+        logger.info("摄像头配置已重载，共 %d 台打印机", len(self._configs))

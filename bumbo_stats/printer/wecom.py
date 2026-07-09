@@ -192,6 +192,96 @@ class WeComNotifier:
                 pass
         logger.info("企业微信通知模块已停止")
 
+    async def send_test_message(self) -> bool:
+        """发送测试消息（包含所有打印机的摄像头截图）
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self._cfg.bot_id or not self._cfg.secret:
+            logger.warning("企业微信未配置 bot_id/secret")
+            return False
+
+        try:
+            # 获取所有打印机的摄像头截图
+            frames = []
+            for serial, name in self._printer_names.items():
+                frame = await self._capture_one(serial)
+                if frame:
+                    frames.append((name, frame))
+                    logger.info("获取测试截图成功: %s", name)
+                else:
+                    logger.warning("获取测试截图失败: %s", name)
+
+            # 构建测试消息
+            from datetime import datetime
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            printer_list = "\n".join([f"- {name}" for name, _ in frames])
+
+            markdown = f"""## 🧪 配置测试消息
+
+> {now}
+
+**发送者**: Bumbo Stats 监控面板
+
+**测试打印机截图**:
+{printer_list}
+
+*如果看到此消息，说明企业微信配置成功！*"""
+
+            # 优先使用配置的 chatid，否则等待自动发现的 chatid
+            chatid = self._cfg.chatid or self._chatid
+            if not chatid:
+                logger.info("等待获取群聊 chatid...")
+                for _ in range(30):  # 最多等 30 秒
+                    await asyncio.sleep(1)
+                    chatid = self._cfg.chatid or self._chatid
+                    if chatid:
+                        break
+                if not chatid:
+                    logger.error("chatid 获取超时")
+                    return False
+
+            # 连接并发送（使用当前配置新建独立连接，绕过旧后台连接）
+            from wecom_aibot_sdk import WSClient
+
+            client = WSClient(
+                bot_id=self._cfg.bot_id,
+                secret=self._cfg.secret,
+                logger=_SilentLogger(),
+            )
+            await client.connect()
+            await asyncio.sleep(2)
+
+            # 发送文字消息
+            await client.send_message(chatid, {
+                "msgtype": "markdown",
+                "markdown": {"content": markdown},
+            })
+
+            # 发送截图
+            ts = int(time.time())
+            for i, (name, frame) in enumerate(frames):
+                media_id = await client.upload_media(
+                    frame,
+                    type="image",
+                    filename=f"test_{ts}_{i+1}.jpg",
+                )
+                await client.send_media_message(
+                    chatid,
+                    media_type="image",
+                    media_id=media_id["media_id"],
+                )
+                logger.info("测试截图发送成功: %s", name)
+
+            await client.disconnect()
+            logger.info("企业微信测试消息发送完成")
+            return True
+
+        except Exception as e:
+            logger.error("发送企业微信测试消息失败: %s", e)
+            return False
+
     # ------------------------------------------------------------------
     # 内部实现
     # ------------------------------------------------------------------
@@ -268,14 +358,16 @@ class WeComNotifier:
         status = item.get("status")
         errors = item.get("errors")
 
-        # 等待 chatid 就绪
-        if not self._chatid:
+        # 优先使用配置的 chatid，否则等待自动发现的 chatid
+        chatid = self._cfg.chatid or self._chatid
+        if not chatid:
             logger.info("chatid 未就绪，等待最多 60s...")
             for _ in range(60):
-                if self._chatid:
+                chatid = self._cfg.chatid or self._chatid
+                if chatid:
                     break
                 await asyncio.sleep(1)
-            if not self._chatid:
+            if not chatid:
                 logger.warning("chatid 超时，跳过本次通知")
                 return
 
@@ -287,7 +379,7 @@ class WeComNotifier:
 
         try:
             # 先发文字状态
-            await self._client.send_message(self._chatid, {
+            await self._client.send_message(chatid, {
                 "msgtype": "markdown",
                 "markdown": {"content": markdown},
             })
@@ -304,7 +396,7 @@ class WeComNotifier:
                 )
                 media_id = upload_result["media_id"]
                 await self._client.send_media_message(
-                    self._chatid,
+                    chatid,
                     media_type="image",
                     media_id=media_id,
                 )

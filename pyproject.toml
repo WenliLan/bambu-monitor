@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "bumbo_stats"
-version = "0.5.0"
+version = "0.5.1"
 description = "拓竹3D打印机多机监控面板"
 requires-python = ">=3.10"
 dependencies = [

@@ -55,10 +55,14 @@ async def _reload_printers_impl(new_printers: list[PrinterConfig]):
     """运行时重载打印机配置"""
     global _reload_printers_fn
     manager = None
-    for attr in ["_manager"]:
+    camera = None
+    for attr in ["_manager", "_camera"]:
         if hasattr(router, "_app") and hasattr(router._app.state, attr):
-            manager = getattr(router._app.state, attr)
-            break
+            obj = getattr(router._app.state, attr)
+            if attr == "_manager":
+                manager = obj
+            elif attr == "_camera":
+                camera = obj
     if not manager:
         logger.warning("无法获取 manager 实例")
         return
@@ -77,6 +81,10 @@ async def _reload_printers_impl(new_printers: list[PrinterConfig]):
             manager.add_printer(printer)
             logger.info("已添加打印机: %s (%s)", printer.name, printer.serial)
 
+    # 重载摄像头配置（即时更新 access_code 等）
+    if camera:
+        camera.reload_configs(new_printers)
+
 
 async def _reload_wecom_impl(new_wecom: WeComConfig):
     """运行时重载企业微信配置"""
@@ -92,6 +100,9 @@ async def _reload_wecom_impl(new_wecom: WeComConfig):
 
     # 更新配置
     wecom._cfg = new_wecom
+    # 优先使用配置的 chatid，其次保持已自动发现的 chatid
+    if new_wecom.chatid:
+        wecom._chatid = new_wecom.chatid
     logger.info("企业微信配置已重载: layer3=%s completed=%s error=%s",
                 new_wecom.layer3, new_wecom.completed, new_wecom.error)
 
@@ -260,7 +271,7 @@ def create_app(config: AppConfig | None = None, config_path: str = "printers.yam
     app = FastAPI(
         title="Bumbo Stats",
         description="拓竹3D打印机多机云端监控面板",
-        version="0.5.0",
+        version="0.5.1",
         lifespan=lifespan,
     )
 

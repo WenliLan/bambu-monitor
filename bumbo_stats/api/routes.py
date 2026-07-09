@@ -140,6 +140,16 @@ class WeComUpdate(BaseModel):
     error: bool = True
 
 
+class FeishuUpdate(BaseModel):
+    app_id: str
+    app_secret: str
+    chatid: str = ""
+    enabled: bool = False
+    layer3: bool = True
+    completed: bool = True
+    error: bool = True
+
+
 class PrinterUpdate(BaseModel):
     name: str
     serial: str
@@ -186,6 +196,67 @@ async def save_wecom(request: Request, body: WeComUpdate):
         await request.app.state._reload_wecom(config.wecom)
 
     return {"ok": True}
+
+
+@router.post("/api/settings/feishu")
+async def save_feishu(request: Request, body: FeishuUpdate):
+    """保存飞书配置"""
+    if not require_auth(request):
+        raise HTTPException(status_code=401, detail="未登录")
+
+    config = request.app.state.config
+    config.feishu.app_id = body.app_id
+    config.feishu.app_secret = body.app_secret
+    config.feishu.chatid = body.chatid
+    config.feishu.enabled = body.enabled
+    config.feishu.layer3 = body.layer3
+    config.feishu.completed = body.completed
+    config.feishu.error = body.error
+    config.save_yaml()
+
+    # 通知模块重载配置
+    if hasattr(request.app.state, "_reload_feishu"):
+        await request.app.state._reload_feishu(config.feishu)
+
+    return {"ok": True}
+
+
+@router.post("/api/settings/wecom/test")
+async def test_wecom(request: Request):
+    """发送企业微信测试消息"""
+    if not require_auth(request):
+        raise HTTPException(status_code=401, detail="未登录")
+
+    if not hasattr(request.app.state, "_wecom_notifier") or not request.app.state._wecom_notifier:
+        raise HTTPException(status_code=400, detail="企业微信未启用")
+
+    try:
+        success = await request.app.state._wecom_notifier.send_test_message()
+        if success:
+            return {"ok": True, "message": "测试消息发送成功"}
+        else:
+            raise HTTPException(status_code=400, detail="测试消息发送失败")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"发送失败: {str(e)}")
+
+
+@router.post("/api/settings/feishu/test")
+async def test_feishu(request: Request):
+    """发送飞书测试消息"""
+    if not require_auth(request):
+        raise HTTPException(status_code=401, detail="未登录")
+
+    if not hasattr(request.app.state, "_feishu_notifier") or not request.app.state._feishu_notifier:
+        raise HTTPException(status_code=400, detail="飞书未启用")
+
+    try:
+        success = await request.app.state._feishu_notifier.send_test_message()
+        if success:
+            return {"ok": True, "message": "测试消息发送成功"}
+        else:
+            raise HTTPException(status_code=400, detail="测试消息发送失败")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"发送失败: {str(e)}")
 
 
 @router.post("/api/settings/printers")
