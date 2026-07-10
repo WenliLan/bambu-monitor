@@ -271,7 +271,7 @@ def create_app(config: AppConfig | None = None, config_path: str = "printers.yam
     app = FastAPI(
         title="Bumbo Stats",
         description="拓竹3D打印机多机云端监控面板",
-        version="0.5.1",
+        version="0.5.2",
         lifespan=lifespan,
     )
 

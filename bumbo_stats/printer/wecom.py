@@ -496,10 +496,21 @@ class WeComNotifier:
             lines.append(f"**层数**: {layer}/{total}")
             lines.append(f"**进度**: {progress}%")
 
-        # HMS 错误：合并显示所有错误
+        # HMS 错误：使用注册表提供更友好的中文错误名和建议
         if event == EVENT_ERROR and errors:
             lines.append("")
+            from ..models import lookup_hms_error
             for err in errors:
-                lines.append(f"- **{err.message}** (码: {err.code})")
+                info = lookup_hms_error(err.code)
+                cat = info.get("category", "未知")
+                suggestion = info.get("suggestion", "")
+                # 优先用注册表中文名，其次用云端原始消息
+                name = info.get("cn", err.message) if err.message else info.get("cn", "未知错误")
+                lines.append(f"- **{name}** ({cat})")
+                if suggestion:
+                    lines.append(f"  💡 {suggestion}")
+                # 保留原始信息便于排查
+                lines.append(f"  📋 原始: {err.message or '(无)'}")
+                lines.append(f"  🔢 码: 0x{err.code:08X}")
 
         return "\n".join(lines)

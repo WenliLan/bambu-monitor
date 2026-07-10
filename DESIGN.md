@@ -1,6 +1,6 @@
 # Bumbo Stats — 拓竹3D打印机云端监控系统 设计文档
 
-> **版本**: 0.5.1 | **最后更新**: 2026-07-10
+> **版本**: 0.5.2 | **最后更新**: 2026-07-11
 
 ---
 
@@ -172,7 +172,7 @@ bumbo_stats/
 │           ├── charts.js               # Chart.js 月度折线图
 │           └── camera.js               # 摄像头定时刷新
 │
-├── tests/                              # 测试包（210 个测试）
+├── tests/                              # 测试包（218 个测试）
 │   ├── conftest.py                     # 共享 fixtures
 │   ├── test_api.py                     # API 路由 (19)
 │   ├── test_auth.py                    # 认证 (5)
@@ -181,11 +181,13 @@ bumbo_stats/
 │   ├── test_config.py                  # 配置 (8)
 │   ├── test_core.py                    # 核心 (1)
 │   ├── test_database.py                # 数据库 (26)
+│   ├── test_feishu_notify.py           # 飞书通知 (16)
+│   ├── test_hms_registry.py            # HMS 错误码注册表 (8)
 │   ├── test_manager.py                 # 管理器 (6)
 │   ├── test_models.py                  # 模型 (8)
 │   ├── test_monitor.py                 # 监控器 (22)
 │   ├── test_numerical.py               # 精确数值验证 (31)
-│   ├── test_settings_security.py        # 安全测试 (16)
+│   ├── test_settings_security.py       # 安全测试 (16)
 │   ├── test_templates.py               # 模板 (3)
 │   ├── test_websocket.py               # WebSocket (3)
 │   └── test_wecom_notify.py            # 企业微信通知 (38)
@@ -457,7 +459,7 @@ start_service.bat:
 
 ---
 
-## 六、测试方案（210 个测试，100% 覆盖）
+## 六、测试方案（218 个测试，100% 覆盖）
 
 ### 6.1 覆盖率
 
@@ -467,7 +469,7 @@ start_service.bat:
 | `monitor.py` | 73 | **100%** |
 | **合计** | 224 | **100%** |
 
-**测试总数**: 210 个（原有 194 + 新增安全测试 16）
+**测试总数**: 218 个（原有 194 + 安全测试 16 + 飞书通知 8 + HMS注册表 8）
 
 ### 6.2 测试矩阵
 
@@ -569,7 +571,7 @@ start_service.bat:
 | TC-NV-27 | snapshot_no_sessions | **无 session 日期: 不创建记录** |
 | TC-NV-28 | monthly_date_sequence | **月度日期序列严格连续递增** |
 
-#### 其他模块 (57 tests)
+#### 其他模块 (65 tests)
 
 | 测试文件 | 数量 | 覆盖范围 |
 |----------|:---:|---------|
@@ -578,6 +580,7 @@ start_service.bat:
 | test_camera.py | 4 | X1 不支持、P1S/A1 支持、无 IP、帧缓存 |
 | test_cli.py | 4 | 版本号、缺配置退出、参数解析 |
 | test_config.py | 8 | 完整/最小/不存在/缺字段配置、模型默认值 |
+| test_feishu_notify.py | 16 | 飞书通知去重、消息构建、HMS 错误渲染 |
 | test_manager.py | 6 | 初始化、属性、OFFLINE 默认、MQTT 解析 |
 | test_models.py | 8 | 枚举、默认值、序列化、所有模型结构 |
 | test_settings_security.py | 16 | 密码哈希、Cookie安全、认证流程 |

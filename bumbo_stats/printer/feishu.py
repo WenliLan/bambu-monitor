@@ -427,7 +427,16 @@ class FeishuNotifier:
 
         if event == EVENT_ERROR and errors:
             lines.append("")
+            from ..models import lookup_hms_error
             for err in errors:
-                lines.append(f"- **{err.message}** (码: {err.code})")
+                info = lookup_hms_error(err.code)
+                cat = info.get("category", "未知")
+                suggestion = info.get("suggestion", "")
+                # 优先用注册表中文名，其次用云端原始消息
+                name = info.get("cn", err.message) if err.message else info.get("cn", "未知错误")
+                lines.append(f"- {name} ({cat})")
+                if suggestion:
+                    lines.append(f"  建议: {suggestion}")
+                lines.append(f"  原始: {err.message or '(无)'} | 码: 0x{err.code:08X}")
 
         return "\n".join(lines)
