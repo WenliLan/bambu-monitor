@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 class CloudConfig(BaseModel):
     """拓竹云端账号配置"""
-    username: str = Field(description="拓竹云账号邮箱")
+    username: Optional[str] = None  # 已废弃，保留仅用于 login 子命令
     token_file: str = Field(default="~/.bumbo_token", description="Token 存储路径")
     mqtt_broker: str = Field(default="cn", description="MQTT 服务器区域: cn/us")
 

@@ -126,7 +126,6 @@ def require_auth(request: Request) -> bool:
 # ---------------------------------------------------------------------------
 
 class CloudUpdate(BaseModel):
-    username: str
     token_file: str = "~/.bumbo_token"
     mqtt_broker: str = "cn"
 
@@ -169,7 +168,6 @@ async def save_cloud(request: Request, body: CloudUpdate):
         raise HTTPException(status_code=401, detail="未登录")
 
     config = request.app.state.config
-    config.cloud.username = body.username
     config.cloud.token_file = body.token_file
     config.cloud.mqtt_broker = body.mqtt_broker
     config.save_yaml()

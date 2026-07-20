@@ -170,25 +170,22 @@ class TestSettingsRoutes:
         """TC-API-11: 登录后访问设置页面显示配置"""
         cfg = client.app.state.config
         cfg.ui.admin_password_hash = cfg.hash_password("testpw")
-        cfg.cloud.username = "test@example.com"
         client.post("/api/auth/login", json={"password": "testpw"})
         resp = client.get("/settings")
         assert resp.status_code == 200
-        assert "test@example.com" in resp.text
+        assert "Token 文件路径" in resp.text
 
     def test_tc_api_12_save_cloud_config(self, client):
         """TC-API-12: 保存云端配置"""
         cfg = client.app.state.config
         cfg.ui.admin_password_hash = cfg.hash_password("admin")
-        cfg.cloud.username = "old@example.com"
         client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
         resp = client.post("/api/settings/cloud", json={
-            "username": "new@example.com",
             "token_file": "~/.bumbo_token",
-            "mqtt_broker": "cn",
+            "mqtt_broker": "us",
         })
         assert resp.status_code == 200
-        assert cfg.cloud.username == "new@example.com"
+        assert cfg.cloud.mqtt_broker == "us"
 
     def test_tc_api_13_save_printers_config(self, client):
         """TC-API-13: 保存打印机配置"""
