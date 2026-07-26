@@ -48,6 +48,27 @@ EVENT_ERROR = "error"
 FRAMES_PER_NOTIFICATION = 2
 FRAME_INTERVAL = 30.0  # 秒
 
+# 群聊指令关键词与冷却时间（秒），按顺序匹配，命中即停
+SNAPSHOT_KEYWORDS = ("截图", "监控")
+COMMANDS = (
+    ("help", ("帮助", "help")),
+    ("overview", ("总览",)),
+    ("status", ("状态",)),
+    ("snapshot", SNAPSHOT_KEYWORDS),
+)
+COMMAND_COOLDOWN = {"snapshot": 10.0, "overview": 10.0, "status": 5.0, "help": 3.0}
+
+# 状态对应的图标
+_STATE_EMOJI = {
+    "RUNNING": "🟢",
+    "IDLE": "⚪",
+    "PAUSE": "⏸️",
+    "FINISH": "✅",
+    "FAILED": "❌",
+    "OFFLINE": "⚫",
+    "UNKNOWN": "❓",
+}
+
 
 @dataclass
 class _PrinterNotifState:
@@ -92,10 +113,15 @@ class WeComNotifier:
         wecom_config: WeComConfig,
         printer_configs: list[PrinterConfig],
         camera_manager=None,
+        printer_manager=None,
+        db=None,
     ):
         self._cfg = wecom_config
         self._printer_names = {c.serial: c.name for c in printer_configs}
+        self._printer_locations = {c.serial: c.location or "" for c in printer_configs}
         self._camera = camera_manager
+        self._manager = printer_manager  # 用于状态/总览指令获取实时状态
+        self._db = db  # 用于总览指令获取产能数据
 
         # 通知队列
         self._queue: asyncio.Queue[dict] = asyncio.Queue()
@@ -110,6 +136,7 @@ class WeComNotifier:
         self._chatid: str = wecom_config.chatid
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._last_cmd_ts: dict[str, float] = {}  # 各指令上次触发时间
 
     # ------------------------------------------------------------------
     # 公开 API
@@ -300,9 +327,10 @@ class WeComNotifier:
                     logger=_SilentLogger(),
                 )
 
-                # 注册消息回调以发现 chatid
-                from wecom_aibot_sdk import MessageType
-                self._client.on(MessageType.TEXT, self._on_chat_message)
+                # 注册消息回调：发现 chatid + 响应截图指令
+                # 注意：SDK 事件名为 "message"/"message.text"，
+                # 不能用 MessageType 枚举值（"text"）注册，否则回调永不触发
+                self._client.on("message", self._on_chat_message)
 
                 logger.info("正在连接企业微信 WebSocket...")
                 await self._client.connect()
@@ -320,7 +348,16 @@ class WeComNotifier:
                         item = await asyncio.wait_for(
                             self._queue.get(), timeout=5.0
                         )
-                        await self._process_notification(item)
+                        if item.get("event") == "snapshot":
+                            await self._process_snapshot(item)
+                        elif item.get("event") == "status":
+                            await self._process_status(item)
+                        elif item.get("event") == "overview":
+                            await self._process_overview(item)
+                        elif item.get("event") == "help":
+                            await self._process_help(item)
+                        else:
+                            await self._process_notification(item)
                     except asyncio.TimeoutError:
                         continue
                     except asyncio.CancelledError:
@@ -340,15 +377,394 @@ class WeComNotifier:
                     self._client = None
 
     async def _on_chat_message(self, msg):
-        """收到消息时自动捕获 chatid（仅首次）"""
-        if self._chatid:
-            return
+        """收到消息：自动捕获 chatid + 响应截图指令"""
         body = msg.get("body", {})
         chatid = body.get("chatid", "")
-        if chatid:
+        if chatid and not self._chatid:
             self._chatid = chatid
             chat_type = body.get("chattype", "")
             logger.info("✅ 获取到群聊 chatid: %s (类型: %s)", chatid, chat_type)
+
+        # 指令解析：@机器人 发送含关键词的消息时触发对应指令
+        text = self._extract_text(body)
+        if not text:
+            return
+        for cmd, keywords in COMMANDS:
+            if any(kw in text for kw in keywords):
+                now = time.time()
+                cooldown = COMMAND_COOLDOWN.get(cmd, 5.0)
+                if now - self._last_cmd_ts.get(cmd, 0.0) < cooldown:
+                    logger.info("指令 [%s] 冷却中，忽略: %s", cmd, text.strip()[:50])
+                    return
+                self._last_cmd_ts[cmd] = now
+                try:
+                    self._queue.put_nowait({"event": cmd, "ts": now})
+                    logger.info("收到指令 [%s]，已入队: %s", cmd, text.strip()[:50])
+                except asyncio.QueueFull:
+                    logger.warning("通知队列已满，丢弃指令 [%s]", cmd)
+                return
+
+    @staticmethod
+    def _extract_text(body: dict) -> str:
+        """从消息体中提取文本内容（兼容 text 和 mixed 类型）"""
+        msgtype = body.get("msgtype", "")
+        if msgtype == "text":
+            return body.get("text", {}).get("content", "")
+        if msgtype == "mixed":
+            parts = []
+            for item in body.get("mixed", {}).get("msg_item", []):
+                if item.get("msgtype") == "text":
+                    parts.append(item.get("text", {}).get("content", ""))
+            return " ".join(parts)
+        return ""
+
+    async def _process_snapshot(self, item: dict):
+        """响应截图指令：立即抓取所有打印机当前帧并发送"""
+        chatid = self._cfg.chatid or self._chatid
+        if not chatid:
+            logger.warning("chatid 未就绪，跳过截图指令")
+            return
+
+        # 抓取每台打印机当前帧（单帧，优先缓存）
+        frames: list[tuple[str, bytes]] = []
+        missing: list[str] = []
+        for serial, name in self._printer_names.items():
+            frame = await self._capture_one(serial)
+            if frame:
+                frames.append((name, frame))
+            else:
+                missing.append(name)
+
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = ["## 📷 实时监控截图", f"> {now}", ""]
+        for name, _ in frames:
+            lines.append(f"- {name} ✅")
+        for name in missing:
+            lines.append(f"- {name} ❌ 获取失败")
+
+        try:
+            await self._client.send_message(chatid, {
+                "msgtype": "markdown",
+                "markdown": {"content": "\n".join(lines)},
+            })
+
+            ts = int(time.time())
+            for i, (name, frame) in enumerate(frames):
+                if not self._client:
+                    break
+                upload_result = await self._client.upload_media(
+                    frame,
+                    type="image",
+                    filename=f"snapshot_{ts}_{i+1}.jpg",
+                )
+                await self._client.send_media_message(
+                    chatid,
+                    media_type="image",
+                    media_id=upload_result["media_id"],
+                )
+
+            logger.info("✅ 截图指令已响应: 成功 %d 台, 失败 %d 台", len(frames), len(missing))
+        except Exception as e:
+            logger.error("截图指令发送失败: %s", e)
+
+    async def _process_status(self, item: dict):
+        """响应状态指令：文字回复所有打印机当前状态"""
+        chatid = self._cfg.chatid or self._chatid
+        if not chatid:
+            logger.warning("chatid 未就绪，跳过状态指令")
+            return
+
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = ["## 📊 打印机实时状态", f"> {now}", ""]
+
+        if not self._manager:
+            lines.append("⚠️ 状态数据不可用（manager 未接入）")
+        else:
+            statuses = self._manager.get_all_statuses()
+            for serial, st in statuses.items():
+                emoji = _STATE_EMOJI.get(st.state.value, "❓")
+                lines.append(f"**{emoji} {st.name}** ({st.state.value})")
+                if st.gcode_file:
+                    lines.append(f"- 文件: {st.gcode_file}")
+                if st.total_layers > 0:
+                    lines.append(f"- 层数: {st.current_layer}/{st.total_layers}  进度: {st.progress}%")
+                if st.state.value == "RUNNING" and st.remaining_time > 0:
+                    h, m = divmod(st.remaining_time, 60)
+                    eta = f"{h}小时{m}分钟" if h else f"{m}分钟"
+                    lines.append(f"- 预计剩余: {eta}")
+                if st.nozzle_temp or st.bed_temp:
+                    lines.append(f"- 喷嘴: {st.nozzle_temp:.0f}℃  热床: {st.bed_temp:.0f}℃")
+                if st.hms_errors:
+                    lines.append(f"- 🚨 异常: {len(st.hms_errors)} 个 HMS 错误")
+                lines.append("")
+
+        try:
+            await self._client.send_message(chatid, {
+                "msgtype": "markdown",
+                "markdown": {"content": "\n".join(lines)},
+            })
+            logger.info("✅ 状态指令已响应")
+        except Exception as e:
+            logger.error("状态指令发送失败: %s", e)
+
+    async def _process_help(self, item: dict):
+        """响应帮助指令：列出所有支持的指令"""
+        chatid = self._cfg.chatid or self._chatid
+        if not chatid:
+            logger.warning("chatid 未就绪，跳过帮助指令")
+            return
+
+        markdown = """## 🤖 支持的指令
+
+@机器人 发送含以下关键词的消息即可触发：
+
+- **截图** / **监控** — 发送所有打印机实时摄像头截图
+- **状态** — 文字回复所有打印机当前状态（层数/进度/剩余时间/温度）
+- **总览** — 生成当前监控面板完整快照（HTML 文件，含状态+截图）
+- **帮助** — 显示本消息
+
+另外会自动推送：打印到第 3 层、打印完成、HMS 异常告警"""
+
+        try:
+            await self._client.send_message(chatid, {
+                "msgtype": "markdown",
+                "markdown": {"content": markdown},
+            })
+            logger.info("✅ 帮助指令已响应")
+        except Exception as e:
+            logger.error("帮助指令发送失败: %s", e)
+
+    async def _process_overview(self, item: dict):
+        """响应总览指令：生成与网页面板一致的 HTML 快照并以文件发送
+
+        包含网页的4个区块：实时监控、打印机状态、今日产能饱和度、近30天产能趋势
+        """
+        chatid = self._cfg.chatid or self._chatid
+        if not chatid:
+            logger.warning("chatid 未就绪，跳过总览指令")
+            return
+
+        # 抓取所有打印机当前帧和状态
+        import base64
+        snapshots: dict[str, str] = {}  # serial -> base64 jpeg
+        for serial in self._printer_names:
+            frame = await self._capture_one(serial)
+            if frame:
+                snapshots[serial] = base64.b64encode(frame).decode()
+
+        statuses = self._manager.get_all_statuses() if self._manager else {}
+
+        # 产能数据（与网页 /api/usage/today 和 /api/usage/monthly 同源）
+        today_usage, monthly_usage = [], []
+        if self._db and self._manager:
+            try:
+                today_usage = await self._db.get_today_usage_all(self._manager.printer_names)
+                monthly_usage = await self._db.get_monthly_usage_all(
+                    self._manager.printer_names, days=30
+                )
+            except Exception as e:
+                logger.warning("获取产能数据失败: %s", e)
+
+        html = self._build_overview_html(statuses, snapshots, today_usage, monthly_usage)
+
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        try:
+            upload_result = await self._client.upload_media(
+                html.encode("utf-8"),
+                type="file",
+                filename=f"监控总览_{ts}.html",
+            )
+            await self._client.send_media_message(
+                chatid,
+                media_type="file",
+                media_id=upload_result["media_id"],
+            )
+            logger.info("✅ 总览指令已响应: %d 台状态, %d 张截图, 产能条目 %d",
+                        len(statuses), len(snapshots), len(today_usage))
+        except Exception as e:
+            logger.error("总览指令发送失败: %s", e)
+
+    @staticmethod
+    def _build_monthly_svg(monthly_usage: list) -> str:
+        """用 SVG 绘制近30天产能饱和度折线图（自包含，无需 JS）"""
+        if not monthly_usage or not any(m.points for m in monthly_usage):
+            return '<div class="no-img">暂无产能数据</div>'
+
+        colors = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"]
+        dates = sorted({p.date for m in monthly_usage for p in m.points})
+        n = len(dates)
+        max_pct = max((p.utilization_percent for m in monthly_usage for p in m.points), default=0)
+        # y 轴上限：向上取整到 25 的倍数，至少 25，最多 100
+        ymax = min(100, max(25, int((max_pct + 24.99) // 25) * 25))
+
+        x0, y0, x1, y1 = 55, 15, 745, 205  # 绘图区
+        def px(i):  # 第 i 个日期的 x 坐标
+            return x0 + (x1 - x0) * (i / (n - 1)) if n > 1 else (x0 + x1) / 2
+        def py(v):  # 百分比 v 的 y 坐标
+            return y1 - (y1 - y0) * (min(v, ymax) / ymax)
+
+        parts = []
+        # 网格线 + y 轴刻度
+        steps = 4
+        for s in range(steps + 1):
+            v = ymax * s / steps
+            y = py(v)
+            parts.append(f'<line x1="{x0}" y1="{y:.1f}" x2="{x1}" y2="{y:.1f}" stroke="#374151" stroke-width="1"/>')
+            parts.append(f'<text x="{x0 - 8}" y="{y + 4:.1f}" text-anchor="end" fill="#9ca3af" font-size="11">{v:.0f}%</text>')
+        # x 轴日期标签（首/中/尾）
+        for i in {0, n // 2, n - 1}:
+            parts.append(f'<text x="{px(i):.1f}" y="{y1 + 18}" text-anchor="middle" fill="#9ca3af" font-size="11">{str(dates[i])[5:]}</text>')
+        # 每台打印机的折线
+        legends = []
+        for idx, m in enumerate(monthly_usage):
+            color = colors[idx % len(colors)]
+            pts = " ".join(
+                f"{px(dates.index(p.date)):.1f},{py(p.utilization_percent):.1f}"
+                for p in sorted(m.points, key=lambda p: p.date)
+            )
+            if pts:
+                parts.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2"/>')
+            legends.append(
+                f'<span class="legend-item"><span class="dot" style="background:{color}"></span>{m.printer_name}</span>'
+            )
+
+        return (
+            f'<svg viewBox="0 0 760 235" style="width:100%;height:auto">{"".join(parts)}</svg>'
+            f'<div class="legend">{"".join(legends)}</div>'
+        )
+
+    def _build_overview_html(self, statuses: dict, snapshots: dict[str, str],
+                             today_usage: list = None, monthly_usage: list = None) -> str:
+        """生成自包含的监控总览 HTML，内容与网页面板四个区块一致"""
+        from datetime import datetime
+        from html import escape
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        today_usage = today_usage or []
+        monthly_usage = monthly_usage or []
+
+        # 区块1：📷 实时监控（摄像头截图）
+        cam_cards = []
+        for serial, name in self._printer_names.items():
+            img_b64 = snapshots.get(serial, "")
+            img_html = (
+                f'<img src="data:image/jpeg;base64,{img_b64}" alt="{escape(name)}">'
+                if img_b64 else '<div class="no-img">无摄像头画面</div>'
+            )
+            loc = self._printer_locations.get(serial, "")
+            st = statuses.get(serial)
+            state_val = st.state.value if st else "OFFLINE"
+            cam_cards.append(f"""
+    <div class="card">
+      <div class="card-head"><h3>{escape(name)}</h3><span class="loc">{escape(loc)}</span></div>
+      <div class="cam-wrap">{img_html}<span class="state-tag">{state_val}</span></div>
+    </div>""")
+
+        # 区块2：📊 打印机状态（与网页卡片字段一致）
+        stat_cards = []
+        for serial, name in self._printer_names.items():
+            st = statuses.get(serial)
+            if st:
+                state_val = st.state.value
+                emoji = _STATE_EMOJI.get(state_val, "❓")
+                progress = st.progress
+                h, m = divmod(st.remaining_time, 60)
+                eta = (f"{h}小时{m}分钟" if h else f"{m}分钟") if st.remaining_time > 0 else "--"
+                rows = f"""
+        <tr><td>状态</td><td>{emoji} {state_val}</td></tr>
+        <tr><td>进度</td><td>{progress}%</td></tr>
+        <tr><td>喷嘴温度</td><td>{st.nozzle_temp:.0f} / {st.nozzle_target_temp:.0f}℃</td></tr>
+        <tr><td>热床温度</td><td>{st.bed_temp:.0f} / {st.bed_target_temp:.0f}℃</td></tr>
+        <tr><td>机箱温度</td><td>{st.chamber_temp:.0f}℃</td></tr>
+        <tr><td>剩余时间</td><td>{eta}</td></tr>
+        <tr><td>层数</td><td>{st.current_layer} / {st.total_layers}</td></tr>
+        <tr><td>文件</td><td>{escape(st.gcode_file) or '--'}</td></tr>
+        <tr><td>HMS 异常</td><td>{len(st.hms_errors) or '无'}</td></tr>"""
+            else:
+                progress = 0
+                rows = '<tr><td>状态</td><td>⚫ 无数据</td></tr>'
+            stat_cards.append(f"""
+    <div class="card">
+      <h3>{escape(name)}</h3>
+      <div class="bar"><div class="fill" style="width:{progress}%"></div></div>
+      <table>{rows}</table>
+    </div>""")
+
+        # 区块3：🏭 今日产能饱和度
+        util_rows = []
+        for u in today_usage:
+            pct = u.utilization_percent
+            util_rows.append(f"""
+    <div class="util-row">
+      <span class="util-name">{escape(u.printer_name)}</span>
+      <span class="util-pct">{pct:.1f}%</span>
+      <div class="util-track"><div class="util-fill" style="width:{min(pct, 100):.1f}%"></div></div>
+      <span class="util-time">{escape(u.print_time_display)}</span>
+    </div>""")
+        util_html = "".join(util_rows) or '<div class="no-img">暂无产能数据</div>'
+
+        # 区块4：📈 近30天产能趋势（SVG 折线图）
+        chart_html = self._build_monthly_svg(monthly_usage)
+
+        return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bumbo Stats 监控总览 {now}</title>
+<style>
+  body {{ font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         background: #111827; color: #e5e7eb; margin: 0; padding: 24px; }}
+  h1 {{ font-size: 20px; margin: 0; }} .ts {{ color: #9ca3af; font-size: 13px; margin: 6px 0 4px; }}
+  h2 {{ font-size: 16px; margin: 28px 0 12px; border-left: 3px solid #10b981; padding-left: 10px; }}
+  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }}
+  .card {{ background: #1f2937; border-radius: 12px; padding: 16px; }}
+  .card h3 {{ font-size: 15px; margin: 0 0 10px; }}
+  .card-head {{ display: flex; justify-content: space-between; align-items: center; }}
+  .loc {{ color: #9ca3af; font-size: 12px; }}
+  .cam-wrap {{ position: relative; }}
+  .cam-wrap img {{ width: 100%; border-radius: 8px; display: block; }}
+  .state-tag {{ position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6);
+                padding: 2px 8px; border-radius: 6px; font-size: 12px; }}
+  .no-img {{ height: 180px; display: flex; align-items: center; justify-content: center;
+             background: #374151; border-radius: 8px; color: #9ca3af; }}
+  .bar {{ height: 6px; background: #374151; border-radius: 3px; margin: 10px 0; }}
+  .fill {{ height: 100%; background: #10b981; border-radius: 3px; }}
+  table {{ width: 100%; font-size: 13px; border-collapse: collapse; }}
+  td {{ padding: 4px 0; border-bottom: 1px solid #374151; }}
+  td:first-child {{ color: #9ca3af; width: 90px; }}
+  .panel {{ background: #1f2937; border-radius: 12px; padding: 16px; }}
+  .util-row {{ display: flex; align-items: center; gap: 12px; padding: 8px 0;
+               border-bottom: 1px solid #374151; }}
+  .util-name {{ width: 90px; font-size: 14px; }}
+  .util-pct {{ width: 60px; text-align: right; font-size: 14px; color: #10b981; }}
+  .util-track {{ flex: 1; height: 8px; background: #374151; border-radius: 4px; }}
+  .util-fill {{ height: 100%; background: #10b981; border-radius: 4px; }}
+  .util-time {{ width: 80px; text-align: right; color: #9ca3af; font-size: 13px; }}
+  .legend {{ margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }}
+  .legend-item {{ display: inline-flex; align-items: center; gap: 6px; }}
+  .dot {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; }}
+</style>
+</head>
+<body>
+<h1>🖨️ Bumbo Stats 监控总览</h1>
+<div class="ts">快照时间: {now}</div>
+<h2>📷 实时监控</h2>
+<div class="grid">{''.join(cam_cards)}
+</div>
+<h2>📊 打印机状态</h2>
+<div class="grid">{''.join(stat_cards)}
+</div>
+<h2>🏭 今日产能饱和度</h2>
+<div class="panel">{util_html}
+</div>
+<h2>📈 近30天产能饱和度趋势</h2>
+<div class="panel">{chart_html}
+</div>
+</body>
+</html>"""
 
     async def _process_notification(self, item: dict):
         """处理一条通知：抓帧 → 上传 → 发送"""

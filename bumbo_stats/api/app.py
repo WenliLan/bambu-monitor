@@ -230,6 +230,8 @@ async def lifespan(app: FastAPI):
                 ),
                 printer_configs=config.printers,
                 camera_manager=camera,
+                printer_manager=manager,
+                db=db,
             )
             await _wecom_notifier.start()
             monitor.wecom_notifier = _wecom_notifier

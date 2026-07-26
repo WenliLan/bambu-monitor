@@ -19,6 +19,7 @@
 import json
 import os
 import pytest
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 import hashlib
@@ -37,6 +38,8 @@ def _create_test_app():
             PrinterConfig(name="TestP1", serial="S001", ip="1.2.3.4", access_code="0000"),
         ],
         settings=AppSettings(db_path=":memory:"),
+        # 重定向保存路径到临时目录，防止测试覆盖真实 printers.yaml
+        config_path=str(Path(tempfile.mkdtemp()) / "printers.yaml"),
     )
 
     # mock 打印机管理器

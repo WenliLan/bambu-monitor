@@ -66,9 +66,13 @@ class AppConfig(BaseModel):
     wecom: WeComSettings = Field(default_factory=WeComSettings)
     feishu: FeishuSettings = Field(default_factory=FeishuSettings)
     ui: UiSettings = Field(default_factory=UiSettings)
+    # 配置文件来源路径（不写入 YAML）；save_yaml 默认写回此路径，
+    # 避免测试等场景下误覆盖工作目录中的真实 printers.yaml
+    config_path: Optional[str] = Field(default=None, exclude=True)
 
-    def save_yaml(self, path: str = "printers.yaml"):
-        """将当前配置保存到 YAML 文件"""
+    def save_yaml(self, path: Optional[str] = None):
+        """将当前配置保存到 YAML 文件（默认写回加载来源路径）"""
+        path = path or self.config_path or "printers.yaml"
         data = {
             "cloud": self.cloud.model_dump(),
             "printers": [p.model_dump() for p in self.printers],
@@ -132,4 +136,5 @@ def load_config(config_path: str = "printers.yaml") -> AppConfig:
     feishu = FeishuSettings(**data.get("feishu", {}))
     ui = UiSettings(**data.get("ui", {}))
 
-    return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom, feishu=feishu, ui=ui)
+    return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom,
+                     feishu=feishu, ui=ui, config_path=str(path))
