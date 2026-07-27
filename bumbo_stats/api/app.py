@@ -103,8 +103,9 @@ async def _reload_wecom_impl(new_wecom: WeComConfig):
     # 优先使用配置的 chatid，其次保持已自动发现的 chatid
     if new_wecom.chatid:
         wecom._chatid = new_wecom.chatid
-    logger.info("企业微信配置已重载: layer3=%s completed=%s error=%s",
-                new_wecom.layer3, new_wecom.completed, new_wecom.error)
+    logger.info("企业微信配置已重载: layer3=%s progress50=%s completed=%s error=%s",
+                new_wecom.layer3, getattr(new_wecom, "progress50", True),
+                new_wecom.completed, new_wecom.error)
 
 
 @asynccontextmanager
@@ -225,6 +226,7 @@ async def lifespan(app: FastAPI):
                     secret=config.wecom.secret,
                     chatid=config.wecom.chatid,
                     layer3=config.wecom.layer3,
+                    progress50=config.wecom.progress50,
                     completed=config.wecom.completed,
                     error=config.wecom.error,
                 ),

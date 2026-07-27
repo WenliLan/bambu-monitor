@@ -218,11 +218,13 @@ class TestSettingsRoutes:
             "secret": "secret456",
             "chatid": "chat789",
             "layer3": True,
+            "progress50": False,
             "completed": True,
             "error": False,
         })
         assert resp.status_code == 200
         assert cfg.wecom.bot_id == "bot123"
+        assert cfg.wecom.progress50 is False
         assert cfg.wecom.error is False
 
     def test_tc_api_15_change_password(self, client):

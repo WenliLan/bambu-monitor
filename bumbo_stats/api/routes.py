@@ -135,6 +135,7 @@ class WeComUpdate(BaseModel):
     secret: str
     chatid: str = ""
     layer3: bool = True
+    progress50: bool = True
     completed: bool = True
     error: bool = True
 
@@ -185,6 +186,7 @@ async def save_wecom(request: Request, body: WeComUpdate):
     config.wecom.secret = body.secret
     config.wecom.chatid = body.chatid
     config.wecom.layer3 = body.layer3
+    config.wecom.progress50 = body.progress50
     config.wecom.completed = body.completed
     config.wecom.error = body.error
     config.save_yaml()

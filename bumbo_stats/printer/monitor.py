@@ -8,6 +8,7 @@ from typing import Callable, Awaitable, Optional
 from ..database import Database
 from ..models import PrinterState, PrinterStatus
 from .manager import PrinterManager
+from .wecom import normalize_gcode
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,12 @@ DEFAULT_BROADCAST_INTERVAL = 5.0
 
 # 触发通知的层数阈值
 NOTIFY_LAYER = 3
+
+# 触发通知的进度阈值（百分比）
+NOTIFY_PROGRESS = 50
+
+# 触发完成通知的进度阈值（99% 时打印头尚未归位，截图能拍到成品）
+NOTIFY_COMPLETE_PROGRESS = 99
 
 
 class PrintMonitor:
@@ -40,6 +47,8 @@ class PrintMonitor:
         self._prev_gcode: dict[str, str] = {}        # 更旧的上一次 gcode（用于比较）
         # 追踪每台打印机已触发的 layer3 通知（防止重复）
         self._layer3_notified: dict[str, bool] = {}
+        # 追踪每台打印机已触发的 50% 进度通知（防止重复）
+        self._progress50_notified: dict[str, bool] = {}
         self._running = False
         self._last_snapshot_date: date | None = date.today()
 
@@ -94,20 +103,20 @@ class PrintMonitor:
             gcode = status.gcode_file or ""
             # 初始化 gcode 追踪
             self._last_gcode[serial] = gcode
-            # 初始化 layer3 标记：已超第3层的设为 True，未到的设为 False
-            if status.current_layer >= NOTIFY_LAYER:
-                self._layer3_notified[serial] = True
-            else:
-                self._layer3_notified[serial] = False
+            # 运行中任务一律标记已发（历史事件不补发）：
+            # 启动时 MQTT 数据可能不完整（打印中却报 layer=0/0），
+            # 若据此设为 False，后续首条完整消息会在中途层数误发通知
+            self._layer3_notified[serial] = True
+            self._progress50_notified[serial] = True
             # 同步更新 WeComNotifier 的状态，防止 gcode 变化误判
             if self.wecom_notifier and serial in self.wecom_notifier._states:
                 self.wecom_notifier._states[serial].last_gcode = gcode
-                if status.current_layer >= NOTIFY_LAYER:
-                    self.wecom_notifier._states[serial].layer3_sent = True
+                self.wecom_notifier._states[serial].layer3_sent = True
+                self.wecom_notifier._states[serial].progress50_sent = True
             logger.info(
-                "[启动扫描] 初始化 %s: layer=%d/%d progress=%d%% gcode=%s layer3_notified=%s",
+                "[启动扫描] 初始化 %s: layer=%d/%d progress=%d%% gcode=%s (运行中任务不补发通知)",
                 serial, status.current_layer, status.total_layers,
-                status.progress, gcode, self._layer3_notified.get(serial, False),
+                status.progress, gcode,
             )
 
     def stop(self):
@@ -148,7 +157,7 @@ class PrintMonitor:
         await self.broadcast(payload)
 
     def _check_progress_events(self, serial: str, status: PrinterStatus):
-        """检查打印进度事件（第3层 / 100% 完成），触发企业微信通知
+        """检查打印进度事件（第3层 / 50%进度 / 100% 完成），触发企业微信通知
 
         Args:
             serial: 打印机序列号
@@ -175,17 +184,21 @@ class PrintMonitor:
 
         gcode = status.gcode_file or ""
 
-        # 检测新任务，重置层3标记
+        # 检测新任务，重置层3/50%进度标记
         # 通过 handle_status_update 调用时：_prev_gcode 保存了更旧的值
         # 直接调用（如启动扫描）时：_prev_gcode 为空，fallback 到 _last_gcode
         prev_gcode = self._prev_gcode.get(serial, self._last_gcode.get(serial, ""))
-        if gcode and gcode != prev_gcode:
+        # 归一化后比较：云端任务名不含扩展名，MQTT 上报含 .3mf，避免误判新任务
+        if gcode and normalize_gcode(gcode) != normalize_gcode(prev_gcode):
             self._layer3_notified[serial] = False
+            self._progress50_notified[serial] = False
 
-        # 事件1：到达第3层（只有 current_layer==3 时触发一次）
+        # 事件1：到达第3层（>= 判断，MQTT 跳层上报也不会错过；标记防止重复；
+        # progress<99 避免完成时补发 layer3）
         if (
             not self._layer3_notified.get(serial, False)
-            and status.current_layer == NOTIFY_LAYER
+            and status.current_layer >= NOTIFY_LAYER
+            and status.progress < NOTIFY_COMPLETE_PROGRESS
         ):
             self._layer3_notified[serial] = True
             logger.info(
@@ -194,12 +207,24 @@ class PrintMonitor:
             )
             self.wecom_notifier.notify(serial, "layer3", status)
 
-        # 事件2：进度100%（只要 progress>=100 就触发）
-        # 注意：RUNNING→FINISH 时 state 已变为 FINISH，_check_progress_events
-        # 不会进入此分支，completed 通知由 _handle_state_change 在检测到 FINISH 时触发
-        if status.progress >= 100:
+        # 事件2：进度过半（>=50%，未到完成阈值时触发一次）
+        if (
+            not self._progress50_notified.get(serial, False)
+            and NOTIFY_PROGRESS <= status.progress < NOTIFY_COMPLETE_PROGRESS
+        ):
+            self._progress50_notified[serial] = True
             logger.info(
-                "触发100%%通知: %s progress=%d file=%s",
+                "触发50%%进度通知: %s progress=%d layer=%d/%d file=%s",
+                serial, status.progress, status.current_layer, status.total_layers, gcode,
+            )
+            self.wecom_notifier.notify(serial, "progress50", status)
+
+        # 事件3：进度达到完成阈值（99%，此时截图能拍到成品；wecom 层 completed_sent 去重）
+        # 注意：RUNNING→FINISH 时 state 已变为 FINISH，_check_progress_events
+        # 不会进入此分支，完成通知由 _handle_state_change 在检测到 FINISH 时兜底触发
+        if status.progress >= NOTIFY_COMPLETE_PROGRESS:
+            logger.info(
+                "触发完成通知(>=99%%): %s progress=%d file=%s",
                 serial, status.progress, gcode,
             )
             self.wecom_notifier.notify(serial, "completed", status)
@@ -214,9 +239,10 @@ class PrintMonitor:
             # 状态不变时：仍需更新 _last_gcode（支持同一状态下的 gcode 变化检测）
             prev_gcode = self._last_gcode.get(serial, "")
             self._last_gcode[serial] = curr_gcode
-            # 检测 gcode_file 变化（断线期间完成旧任务又开始新任务）
+            # 检测 gcode_file 变化（断线期间完成旧任务又开始新任务），归一化后比较
             if curr_state == PrinterState.RUNNING:
-                if prev_gcode and curr_gcode and prev_gcode != curr_gcode:
+                if (prev_gcode and curr_gcode
+                        and normalize_gcode(prev_gcode) != normalize_gcode(curr_gcode)):
                     logger.info(
                         "gcode 变化 %s: %s -> %s (结算旧任务+记录新任务)",
                         serial, prev_gcode, curr_gcode,

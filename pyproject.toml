@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "bumbo_stats"
-version = "0.5.4"
+version = "0.5.5"
 description = "拓竹3D打印机多机监控面板"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,6 +19,7 @@ dependencies = [
     "bambu-lab-cloud-api>=1.0.4",
     "pyyaml>=6.0",
     "pydantic>=2.0",
+    "playwright>=1.40",
 ]
 
 [project.optional-dependencies]

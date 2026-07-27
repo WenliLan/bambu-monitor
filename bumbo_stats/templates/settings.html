@@ -120,6 +120,10 @@
                         🖨️ 打印到第 3 层时通知
                     </label>
                     <label class="checkbox-label">
+                        <input type="checkbox" name="progress50" {% if config.wecom.progress50 %}checked{% endif %}>
+                        ⏳ 打印进度 50% 时通知
+                    </label>
+                    <label class="checkbox-label">
                         <input type="checkbox" name="completed" {% if config.wecom.completed %}checked{% endif %}>
                         ✅ 打印完成时通知
                     </label>
@@ -272,6 +276,7 @@ document.getElementById('wecom-form').addEventListener('submit', async e => {
         secret: fd.get('secret'),
         chatid: fd.get('chatid'),
         layer3: fd.has('layer3'),
+        progress50: fd.has('progress50'),
         completed: fd.has('completed'),
         error: fd.has('error'),
     });

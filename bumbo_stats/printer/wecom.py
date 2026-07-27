@@ -1,9 +1,10 @@
 """企业微信智能机器人通知模块 — 在打印关键节点推送摄像头截图到群聊
 
 触发事件:
-  - layer3:    打印到达第 3 层（首层确认，打印正常进行中）
-  - completed: 打印完成（进度 100% / 状态 FINISH）
-  - error:     HMS 健康监控错误（堵头/卡料/缺料等）
+  - layer3:     打印到达第 3 层（首层确认，打印正常进行中）
+  - progress50: 打印进度过半（50%）
+  - completed:  打印完成（进度 >=99% / 状态 FINISH，99% 时截图能拍到成品）
+  - error:      HMS 健康监控错误（堵头/卡料/缺料等）
 
 架构:
   WeComNotifier 维护一个 asyncio.Queue 和一个后台任务。
@@ -41,6 +42,7 @@ class _SilentLogger:
 
 # 通知事件类型
 EVENT_LAYER3 = "layer3"
+EVENT_PROGRESS50 = "progress50"
 EVENT_COMPLETED = "completed"
 EVENT_ERROR = "error"
 
@@ -70,21 +72,46 @@ _STATE_EMOJI = {
 }
 
 
+def normalize_gcode(name: str) -> str:
+    """归一化 gcode 文件名用于任务比较
+
+    云端 API 任务名不含扩展名（如 "CUBE_2.4 wide"），
+    MQTT 上报为文件名（如 "CUBE_2.4 wide.3mf"），
+    直接比较会误判为新任务导致重复通知/任务误分割。
+    """
+    n = (name or "").strip()
+    changed = True
+    while changed:
+        changed = False
+        for ext in (".3mf", ".gcode"):
+            if n.lower().endswith(ext):
+                n = n[: -len(ext)]
+                changed = True
+    return n
+
+
 @dataclass
 class _PrinterNotifState:
     """单台打印机的通知状态追踪"""
     last_gcode: str = ""
     layer3_sent: bool = False
+    progress50_sent: bool = False
     completed_sent: bool = False
     last_error_snapshot: str = ""  # 上次通知的错误快照（防止同错误重复通知）
 
     def reset_if_new_job(self, gcode: str):
-        """检测到新打印任务时重置通知状态"""
-        if gcode and gcode != self.last_gcode:
+        """检测到新打印任务时重置通知状态（文件名归一化后比较）"""
+        if not gcode:
+            return
+        if normalize_gcode(gcode) != normalize_gcode(self.last_gcode):
             self.last_gcode = gcode
             self.layer3_sent = False
+            self.progress50_sent = False
             self.completed_sent = False
             self.last_error_snapshot = ""  # 新任务开始时重置错误状态
+        else:
+            # 同一任务但文件名形式不同（云端任务名 vs MQTT 文件名），同步为最新
+            self.last_gcode = gcode
 
 
 @dataclass
@@ -94,6 +121,7 @@ class WeComConfig:
     secret: str = ""
     chatid: str = ""           # 群聊 chatid，留空则自动发现
     layer3: bool = True        # 是否在第 3 层时发送
+    progress50: bool = True    # 是否在进度 50% 时发送
     completed: bool = True     # 是否在打印完成时发送
     error: bool = True         # 是否在 HMS 错误时发送
 
@@ -147,7 +175,7 @@ class WeComNotifier:
 
         Args:
             serial: 打印机序列号
-            event: 事件类型 (EVENT_LAYER3 / EVENT_COMPLETED / EVENT_ERROR)
+            event: 事件类型 (EVENT_LAYER3 / EVENT_PROGRESS50 / EVENT_COMPLETED / EVENT_ERROR)
             status: 当前 PrinterStatus（可选，用于丰富消息内容）
             errors: 错误列表（仅 EVENT_ERROR 时使用）
         """
@@ -163,6 +191,10 @@ class WeComNotifier:
             if state.layer3_sent or not self._cfg.layer3:
                 return
             state.layer3_sent = True
+        elif event == EVENT_PROGRESS50:
+            if state.progress50_sent or not self._cfg.progress50:
+                return
+            state.progress50_sent = True
         elif event == EVENT_COMPLETED:
             if state.completed_sent or not self._cfg.completed:
                 return
@@ -522,7 +554,7 @@ class WeComNotifier:
 
 - **截图** / **监控** — 发送所有打印机实时摄像头截图
 - **状态** — 文字回复所有打印机当前状态（层数/进度/剩余时间/温度）
-- **总览** — 生成当前监控面板完整快照（HTML 文件，含状态+截图）
+- **总览** — 生成监控面板完整长截图（含状态+截图+产能图表）
 - **帮助** — 显示本消息
 
 另外会自动推送：打印到第 3 层、打印完成、HMS 异常告警"""
@@ -536,10 +568,48 @@ class WeComNotifier:
         except Exception as e:
             logger.error("帮助指令发送失败: %s", e)
 
-    async def _process_overview(self, item: dict):
-        """响应总览指令：生成与网页面板一致的 HTML 快照并以文件发送
+    @staticmethod
+    async def _render_overview_image(html: str) -> Optional[bytes]:
+        """用无头浏览器（系统 Edge 内核）将总览 HTML 渲染为长截图 JPEG
 
-        包含网页的4个区块：实时监控、打印机状态、今日产能饱和度、近30天产能趋势
+        渲染失败（未安装 playwright / 无 Edge）时返回 None，
+        由调用方回退为 HTML 文件发送。
+        """
+        try:
+            from playwright.async_api import async_playwright
+        except ImportError:
+            logger.warning("playwright 未安装，总览回退为 HTML 文件发送")
+            return None
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(channel="msedge", headless=True)
+                try:
+                    page = await browser.new_page(
+                        viewport={"width": 760, "height": 600},
+                        device_scale_factor=2,  # 2x 渲染，手机上放大看清晰
+                    )
+                    await page.set_content(html, wait_until="load")
+                    # 企业微信图片消息限制 2MB，超限时逐档降低质量
+                    img = b""
+                    for quality in (80, 60, 40):
+                        img = await page.screenshot(
+                            full_page=True, type="jpeg", quality=quality
+                        )
+                        if len(img) <= 1_900_000:
+                            break
+                    return img
+                finally:
+                    await browser.close()
+        except Exception as e:
+            logger.warning("总览长截图渲染失败: %s，回退为 HTML 文件发送", e)
+            return None
+
+    async def _process_overview(self, item: dict):
+        """响应总览指令：生成与网页面板一致的长截图发送到群聊
+
+        包含网页的4个区块：实时监控、打印机状态、今日产能饱和度、近30天产能趋势。
+        优先渲染为长截图（图片消息，群里点开即看），
+        渲染失败时回退为自包含 HTML 文件。
         """
         chatid = self._cfg.chatid or self._chatid
         if not chatid:
@@ -571,6 +641,28 @@ class WeComNotifier:
 
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        # 优先：渲染长截图以图片消息发送
+        image = await self._render_overview_image(html)
+        if image:
+            try:
+                upload_result = await self._client.upload_media(
+                    image,
+                    type="image",
+                    filename=f"overview_{ts}.jpg",
+                )
+                await self._client.send_media_message(
+                    chatid,
+                    media_type="image",
+                    media_id=upload_result["media_id"],
+                )
+                logger.info("✅ 总览指令已响应(长截图 %dKB): %d 台状态, %d 张截图, 产能条目 %d",
+                            len(image) // 1024, len(statuses), len(snapshots), len(today_usage))
+                return
+            except Exception as e:
+                logger.error("总览长截图发送失败: %s，回退为 HTML 文件", e)
+
+        # 回退：以 HTML 文件发送
         try:
             upload_result = await self._client.upload_media(
                 html.encode("utf-8"),
@@ -582,7 +674,7 @@ class WeComNotifier:
                 media_type="file",
                 media_id=upload_result["media_id"],
             )
-            logger.info("✅ 总览指令已响应: %d 台状态, %d 张截图, 产能条目 %d",
+            logger.info("✅ 总览指令已响应(HTML文件): %d 台状态, %d 张截图, 产能条目 %d",
                         len(statuses), len(snapshots), len(today_usage))
         except Exception as e:
             logger.error("总览指令发送失败: %s", e)
@@ -888,6 +980,8 @@ class WeComNotifier:
 
         if event == EVENT_LAYER3:
             title = "🖨️ 打印已到达第 3 层"
+        elif event == EVENT_PROGRESS50:
+            title = "⏳ 打印进度已过半 (50%)"
         elif event == EVENT_COMPLETED:
             title = "✅ 打印已完成"
         elif event == EVENT_ERROR:

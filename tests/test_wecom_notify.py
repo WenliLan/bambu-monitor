@@ -33,7 +33,8 @@ from bumbo_stats.models import PrinterState, PrinterStatus, HMSError
 from bumbo_stats.printer.monitor import PrintMonitor
 from bumbo_stats.printer.wecom import (
     WeComNotifier, WeComConfig, _PrinterNotifState,
-    EVENT_LAYER3, EVENT_COMPLETED, EVENT_ERROR,
+    EVENT_LAYER3, EVENT_COMPLETED, EVENT_ERROR, EVENT_PROGRESS50,
+    normalize_gcode,
 )
 
 
@@ -191,18 +192,18 @@ class TestNotificationDeduplicationMonitor:
         mon._check_progress_events("S001", s1)
         assert wecom._queue.qsize() == 1
 
-        # job1 继续打印，不触发
+        # job1 继续打印：layer3 不再触发，但 progress=50 触发 progress50
         s2 = _make_status("S001", PrinterState.RUNNING, "job1.gcode",
                           current_layer=50, total_layers=100, progress=50)
         mon._check_progress_events("S001", s2)
-        assert wecom._queue.qsize() == 1
+        assert wecom._queue.qsize() == 2
 
-        # job2: gcode 变化，_check_progress_events 重置标记并触发
+        # job2: gcode 变化，_check_progress_events 重置标记并触发 layer3
         s3 = _make_status("S001", PrinterState.RUNNING, "job2.gcode",
                           current_layer=3, total_layers=80, progress=4)
         mon._check_progress_events("S001", s3)
         # wecom.notify() 检测到新 gcode，重置 layer3_sent，再触发
-        assert wecom._queue.qsize() == 2
+        assert wecom._queue.qsize() == 3
 
     async def test_tc_notify_04_completed_new_job_resets_via_wecom_layer(self, monitor_with_wecom, mock_wecom_notifier):
         """TC-NOTIFY-04: completed 防重发依赖 wecom 层的 reset_if_new_job
@@ -214,7 +215,7 @@ class TestNotificationDeduplicationMonitor:
         mon._last_states["S001"] = PrinterState.RUNNING
         mon._last_gcode["S001"] = "job1.gcode"
 
-        # job1 完成：触发 completed（同时触发 layer3）
+        # job1 完成：触发 completed（progress=100 时 layer3/progress50 均不触发）
         s1 = _make_status("S001", PrinterState.RUNNING, "job1.gcode",
                           current_layer=100, total_layers=100, progress=100)
         mon._check_progress_events("S001", s1)
@@ -311,7 +312,7 @@ class TestStartupScan:
         assert mon._last_gcode["S001"] == "old_job.gcode"
 
     async def test_tc_notify_08_startup_below_layer3(self, mock_manager, mock_db, broadcast_calls):
-        """TC-NOTIFY-08: 启动时小于第3层 → 初始化 layer3_notified=False（不发送通知）"""
+        """TC-NOTIFY-08: 启动时小于第3层 → 也标记已发（运行中任务不补发，启动数据可能不完整）"""
         _, calls = broadcast_calls
         mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom_notifier=None)
 
@@ -322,8 +323,9 @@ class TestStartupScan:
 
         await mon._scan_startup_notifications()
 
-        # layer3_notified 初始化为 False（未达第3层）
-        assert mon._layer3_notified["S001"] is False
+        # 运行中任务一律标记已发（启动时 MQTT 数据可能不完整，防止误发）
+        assert mon._layer3_notified["S001"] is True
+        assert mon._progress50_notified["S001"] is True
         assert mon._last_gcode["S001"] == "new_job.gcode"
 
     async def test_tc_notify_09_startup_does_not_send_notification(self, mock_manager, mock_db, broadcast_calls):
@@ -402,7 +404,7 @@ class TestStartupScan:
         assert wecom._queue.qsize() == 0
 
     async def test_tc_notify_27_startup_syncs_wecom_state_below_layer3(self, mock_manager, mock_db, broadcast_calls):
-        """TC-NOTIFY-27: 启动时小于第3层，同步 WeComNotifier 的 last_gcode（不设置 layer3_sent）"""
+        """TC-NOTIFY-27: 启动时小于第3层，同样同步标记已发（运行中任务不补发）"""
         _, calls = broadcast_calls
         from bumbo_stats.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
@@ -417,10 +419,11 @@ class TestStartupScan:
 
         await mon._scan_startup_notifications()
 
-        # 同步验证：last_gcode 被初始化，layer3_sent 保持 False
-        assert mon._layer3_notified["S001"] is False
+        # 同步验证：last_gcode 被初始化，运行中任务 layer3_sent 也标记 True
+        assert mon._layer3_notified["S001"] is True
         assert wecom._states["S001"].last_gcode == "new_job.gcode"
-        assert wecom._states["S001"].layer3_sent is False
+        assert wecom._states["S001"].layer3_sent is True
+        assert wecom._states["S001"].progress50_sent is True
         # 不发送通知
         assert wecom._queue.qsize() == 0
 
@@ -461,6 +464,33 @@ class TestNotificationBoundaryConditions:
         assert len(completed_calls) == 1
         assert mock_wecom_notifier.notify.call_count == 1
 
+    async def test_tc_notify_46_progress99_triggers_completed(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-46: 进度 99% 即触发完成通知（截图能拍到成品），不触发 layer3/progress50"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=99, total_layers=100, progress=99)
+        mon._check_progress_events("S001", s)
+
+        events = [c[0][1] for c in mock_wecom_notifier.notify.call_args_list]
+        assert events == [EVENT_COMPLETED]
+
+    async def test_tc_notify_47_progress98_not_completed(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-47: 进度 98% 不触发完成通知（未达 99% 阈值，仅 layer3/progress50）"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=98, total_layers=100, progress=98)
+        mon._check_progress_events("S001", s)
+
+        events = [c[0][1] for c in mock_wecom_notifier.notify.call_args_list]
+        assert EVENT_COMPLETED not in events
+        assert set(events) == {EVENT_LAYER3, EVENT_PROGRESS50}
+
     async def test_tc_notify_14_multiple_printers_independent(self, monitor_with_wecom,
                                                               mock_wecom_notifier):
         """TC-NOTIFY-14: 多台打印机独立追踪，互不干扰"""
@@ -496,17 +526,24 @@ class TestNotificationBoundaryConditions:
         mon._check_progress_events("S002", s4)
         assert mock_wecom_notifier.notify.call_count == 2
 
-    async def test_tc_notify_28_above_layer3_no_trigger(self, monitor_with_wecom, mock_wecom_notifier):
-        """TC-NOTIFY-28: 层数大于3时不触发 layer3 通知（只有==3才触发）"""
+    async def test_tc_notify_28_above_layer3_triggers(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-28: 层数大于3时也触发 layer3 通知（MQTT 跳层上报不漏发），且仅触发一次"""
         mon = monitor_with_wecom
         mon._last_states["S001"] = PrinterState.RUNNING
         mon._last_gcode["S001"] = "job.gcode"
 
-        # 从第4层开始（不是第3层），不应触发 layer3
+        # MQTT 跳层：从未上报过第3层，直接报第4层 → 仍应触发 layer3
         s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
                          current_layer=4, total_layers=100, progress=4)
         mon._check_progress_events("S001", s)
-        mock_wecom_notifier.notify.assert_not_called()
+        assert mock_wecom_notifier.notify.call_count == 1
+        assert mock_wecom_notifier.notify.call_args[0][1] == EVENT_LAYER3
+
+        # 后续层数继续上涨不再重复触发
+        s2 = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                          current_layer=10, total_layers=100, progress=10)
+        mon._check_progress_events("S001", s2)
+        assert mock_wecom_notifier.notify.call_count == 1
 
     async def test_tc_notify_15_layer3_then_completed_same_job(self, monitor_with_wecom,
                                                                  mock_wecom_notifier):
@@ -706,12 +743,12 @@ class TestDoubleLayerDeduplication:
         assert mon._layer3_notified["S001"] is True
         assert wecom._queue.qsize() == 1
 
-        # job1 继续：不再触发
+        # job1 继续：layer3 不再触发，但 progress=50 触发 progress50
         await mon.handle_status_update("S001", _make_status(
             "S001", PrinterState.RUNNING, "job1.gcode",
             current_layer=50, total_layers=100, progress=50
         ))
-        assert wecom._queue.qsize() == 1
+        assert wecom._queue.qsize() == 2
 
         # job2: gcode 变化，_check_progress_events 先检测并重置标记，然后 layer=3 触发
         await mon.handle_status_update("S001", _make_status(
@@ -719,16 +756,16 @@ class TestDoubleLayerDeduplication:
             current_layer=3, total_layers=80, progress=4
         ))
         # gcode 变化时：layer3 重置（为 False），然后再次触发 layer3（又设为 True）
-        # 验证：layer3 事件再次入队（queue 从 1 增到 2）
-        assert wecom._queue.qsize() == 2
+        # 验证：layer3 事件再次入队（queue 从 2 增到 3）
+        assert wecom._queue.qsize() == 3
 
         # job2 完成：completed 也触发
         await mon.handle_status_update("S001", _make_status(
             "S001", PrinterState.RUNNING, "job2.gcode",
             current_layer=80, total_layers=80, progress=100
         ))
-        # completed 事件入队（queue 从 2 增到 3）
-        assert wecom._queue.qsize() == 3
+        # completed 事件入队（queue 从 3 增到 4）
+        assert wecom._queue.qsize() == 4
 
     async def test_tc_notify_25_both_layers_prevent_duplicate(self, mock_manager, mock_db,
                                                                broadcast_calls):
@@ -772,6 +809,166 @@ class TestDoubleLayerDeduplication:
 
 
 # ---------------------------------------------------------------------------
+# TC-NOTIFY-39~43: 50% 进度通知测试
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestProgress50Notification:
+    async def test_tc_notify_39_progress50_triggers_once(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-39: 进度达到 50% 触发 progress50 通知，且仅触发一次"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+        mon._layer3_notified["S001"] = True  # 隔离 layer3
+
+        s1 = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                          current_layer=50, total_layers=100, progress=50)
+        mon._check_progress_events("S001", s1)
+        assert mock_wecom_notifier.notify.call_count == 1
+        assert mock_wecom_notifier.notify.call_args[0][1] == EVENT_PROGRESS50
+
+        # 进度继续上涨不重复触发
+        s2 = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                          current_layer=70, total_layers=100, progress=70)
+        mon._check_progress_events("S001", s2)
+        assert mock_wecom_notifier.notify.call_count == 1
+
+    async def test_tc_notify_40_progress50_skip_jump_still_triggers(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-40: MQTT 跳过 50%（如 49→62）仍触发 progress50（>= 判断）"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+        mon._layer3_notified["S001"] = True  # 隔离 layer3
+
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=62, total_layers=100, progress=62)
+        mon._check_progress_events("S001", s)
+        assert mock_wecom_notifier.notify.call_count == 1
+        assert mock_wecom_notifier.notify.call_args[0][1] == EVENT_PROGRESS50
+
+    async def test_tc_notify_41_progress100_not_trigger_progress50(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-41: progress=100 不触发 progress50（只触发 completed）"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job.gcode"
+        mon._layer3_notified["S001"] = True  # 隔离 layer3
+
+        s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
+                         current_layer=100, total_layers=100, progress=100)
+        mon._check_progress_events("S001", s)
+
+        events = [c[0][1] for c in mock_wecom_notifier.notify.call_args_list]
+        assert EVENT_PROGRESS50 not in events
+        assert events == [EVENT_COMPLETED]
+
+    async def test_tc_notify_42_progress50_resets_on_new_job(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-42: 新 gcode 任务重置 progress50 标记，可再次触发"""
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        cfg = _make_wecom_config()
+        cfg.layer3 = False  # 隔离 layer3
+        wecom = WeComNotifier(cfg, [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "job1.gcode"
+
+        # job1 达到 50%
+        s1 = _make_status("S001", PrinterState.RUNNING, "job1.gcode",
+                          current_layer=50, total_layers=100, progress=50)
+        mon._check_progress_events("S001", s1)
+        assert wecom._queue.qsize() == 1
+        assert mon._progress50_notified["S001"] is True
+
+        # job2：gcode 变化重置标记，再次达到 50% 可再触发
+        s2 = _make_status("S001", PrinterState.RUNNING, "job2.gcode",
+                          current_layer=40, total_layers=80, progress=55)
+        mon._check_progress_events("S001", s2)
+        assert wecom._queue.qsize() == 2
+
+    async def test_tc_notify_43_progress50_disabled_in_config(self):
+        """TC-NOTIFY-43: 配置 progress50=False 时不入队；wecom 层对 progress50 去重"""
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+
+        # 禁用 progress50：不入队
+        cfg = _make_wecom_config()
+        cfg.progress50 = False
+        notifier = WeComNotifier(cfg, [printer_cfg])
+        notifier._queue = asyncio.Queue(maxsize=10)
+        notifier._chatid = "test_chatid"
+        status = _make_status("S001", current_layer=50, total_layers=100, progress=50)
+        notifier.notify("S001", EVENT_PROGRESS50, status)
+        assert notifier._queue.qsize() == 0
+
+        # 启用时：第1次入队，第2次去重
+        notifier2 = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        notifier2._queue = asyncio.Queue(maxsize=10)
+        notifier2._chatid = "test_chatid"
+        notifier2.notify("S001", EVENT_PROGRESS50, status)
+        assert notifier2._queue.qsize() == 1
+        notifier2.notify("S001", EVENT_PROGRESS50, status)
+        assert notifier2._queue.qsize() == 1
+
+
+# ---------------------------------------------------------------------------
+# TC-NOTIFY-44~45: gcode 文件名归一化（云端任务名 vs MQTT 文件名）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestGcodeNormalization:
+    async def test_tc_notify_44_normalize_gcode(self):
+        """TC-NOTIFY-44: normalize_gcode 去扩展名归一化"""
+        assert normalize_gcode("CUBE_2.4 wide.3mf") == "CUBE_2.4 wide"
+        assert normalize_gcode("CUBE_2.4 wide") == "CUBE_2.4 wide"
+        assert normalize_gcode("job.gcode") == "job"
+        assert normalize_gcode("job.gcode.3mf") == "job"
+        assert normalize_gcode("JOB.3MF") == "JOB"
+        assert normalize_gcode("") == ""
+        assert normalize_gcode(None) == ""
+
+    async def test_tc_notify_45_extension_mismatch_not_new_job(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-45: 启动补录的云端任务名与 MQTT 文件名(.3mf)视为同一任务，不重复通知
+
+        回归场景：启动扫描用云端任务名（无扩展名）标记已发，
+        首条 MQTT 消息带 .3mf 扩展名被误判为新任务而重置标记、补发通知。
+        """
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+
+        # 模拟启动扫描：云端任务名（无扩展名）+ 标记已发
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "CUBE_2.4 wide"
+        mon._layer3_notified["S001"] = True
+        mon._progress50_notified["S001"] = True
+        wecom._states["S001"].last_gcode = "CUBE_2.4 wide"
+        wecom._states["S001"].layer3_sent = True
+        wecom._states["S001"].progress50_sent = True
+
+        # 首条 MQTT 消息：同一任务但文件名带 .3mf，不应重置标记、不应触发通知
+        s = _make_status("S001", PrinterState.RUNNING, "CUBE_2.4 wide.3mf",
+                         current_layer=293, total_layers=485, progress=58)
+        mon._check_progress_events("S001", s)
+        assert wecom._queue.qsize() == 0
+        assert mon._layer3_notified["S001"] is True
+        assert mon._progress50_notified["S001"] is True
+
+        # 真正的新任务仍能正常触发
+        mon._last_gcode["S001"] = "CUBE_2.4 wide.3mf"
+        s2 = _make_status("S001", PrinterState.RUNNING, "other_job.3mf",
+                          current_layer=3, total_layers=100, progress=3)
+        mon._check_progress_events("S001", s2)
+        assert wecom._queue.qsize() == 1
+
+
+# ---------------------------------------------------------------------------
 # TC-NOTIFY-29~: HMS 错误通知测试
 # ---------------------------------------------------------------------------
 
@@ -798,7 +995,9 @@ class TestHMSErrorNotification:
         _, calls = broadcast_calls
         from bumbo_stats.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
-        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        cfg = _make_wecom_config()
+        cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
+        wecom = WeComNotifier(cfg, [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
         wecom._chatid = "test_chatid"
         mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
@@ -824,7 +1023,9 @@ class TestHMSErrorNotification:
         _, calls = broadcast_calls
         from bumbo_stats.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
-        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        cfg = _make_wecom_config()
+        cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
+        wecom = WeComNotifier(cfg, [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
         wecom._chatid = "test_chatid"
         mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
@@ -850,7 +1051,9 @@ class TestHMSErrorNotification:
         _, calls = broadcast_calls
         from bumbo_stats.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
-        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        cfg = _make_wecom_config()
+        cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
+        wecom = WeComNotifier(cfg, [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
         wecom._chatid = "test_chatid"
         mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
@@ -900,6 +1103,7 @@ class TestHMSErrorNotification:
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         cfg = _make_wecom_config()
         cfg.error = False  # 禁用
+        cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
         wecom = WeComNotifier(cfg, [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
         wecom._chatid = "test_chatid"
@@ -920,7 +1124,9 @@ class TestHMSErrorNotification:
         from bumbo_stats.config import PrinterConfig
         p1_cfg = PrinterConfig(serial="S001", name="P1")
         p2_cfg = PrinterConfig(serial="S002", name="P2")
-        wecom = WeComNotifier(_make_wecom_config(), [p1_cfg, p2_cfg])
+        cfg = _make_wecom_config()
+        cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
+        wecom = WeComNotifier(cfg, [p1_cfg, p2_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
         wecom._chatid = "test_chatid"
         mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
