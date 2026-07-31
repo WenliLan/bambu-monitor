@@ -50,6 +50,11 @@ EVENT_ERROR = "error"
 FRAMES_PER_NOTIFICATION = 2
 FRAME_INTERVAL = 30.0  # 秒
 
+# 连接守护检查间隔（秒）：SDK 被服务端踢下线（同凭证新连接顶替）或
+# 重连次数耗尽后会静默放弃，出站通知走 HTTP 不受影响，
+# 但群指令（WebSocket 入站）会永久失效，需定期检查并重建连接
+CONNECTION_CHECK_INTERVAL = 60.0
+
 # 群聊指令关键词与冷却时间（秒），按顺序匹配，命中即停
 SNAPSHOT_KEYWORDS = ("截图", "监控")
 COMMANDS = (
@@ -374,7 +379,8 @@ class WeComNotifier:
                         "等待群聊 chatid：请在企业微信群中 @机器人 发一条消息..."
                     )
 
-                # 持续处理通知队列
+                # 持续处理通知队列 + 定期检查 WebSocket 连接（守护入站指令通道）
+                last_conn_check = time.time()
                 while self._running:
                     try:
                         item = await asyncio.wait_for(
@@ -391,9 +397,21 @@ class WeComNotifier:
                         else:
                             await self._process_notification(item)
                     except asyncio.TimeoutError:
-                        continue
+                        pass
                     except asyncio.CancelledError:
                         raise
+
+                    # 连接守护：SDK 被踢下线/重连耗尽后不会自行恢复，
+                    # 检测到断开则跳出内循环，由外层重建客户端
+                    now = time.time()
+                    if now - last_conn_check >= CONNECTION_CHECK_INTERVAL:
+                        last_conn_check = now
+                        if not self._client.is_connected:
+                            logger.warning(
+                                "企业微信 WebSocket 已断开（可能被同凭证新连接顶替"
+                                "或重连耗尽），重建连接..."
+                            )
+                            break
 
             except asyncio.CancelledError:
                 break

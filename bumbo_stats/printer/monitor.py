@@ -44,11 +44,16 @@ class PrintMonitor:
         self.wecom_notifier = wecom_notifier  # 可选：企业微信通知器
         self._last_states: dict[str, PrinterState] = {}
         self._last_gcode: dict[str, str] = {}       # 上次处理时的 gcode（用于检测变化）
-        self._prev_gcode: dict[str, str] = {}        # 更旧的上一次 gcode（用于比较）
+        # 最后一次确定状态（跳过 UNKNOWN/OFFLINE，用于区分断线重连和真正的新任务）
+        self._last_definite_state: dict[str, PrinterState] = {}
+        # 当前通知周期对应的任务文件（用于检测新任务重置通知标记）
+        self._notify_job_gcode: dict[str, str] = {}
         # 追踪每台打印机已触发的 layer3 通知（防止重复）
         self._layer3_notified: dict[str, bool] = {}
         # 追踪每台打印机已触发的 50% 进度通知（防止重复）
         self._progress50_notified: dict[str, bool] = {}
+        # 追踪每台打印机已触发的完成通知（防止 99% 后每条消息重复入队/刷日志）
+        self._completed_notified: dict[str, bool] = {}
         self._running = False
         self._last_snapshot_date: date | None = date.today()
 
@@ -96,23 +101,35 @@ class PrintMonitor:
         logger.info("[启动扫描] 开始扫描 %d 台打印机...", len(self.manager.get_all_statuses()))
         statuses = self.manager.get_all_statuses()
         for serial, status in statuses.items():
-            # 跳过非运行状态
+            # 非运行态：结算残留的孤儿 running session（服务停机期间
+            # 打完/失败的任务没机会走状态变更结算，会被产能计算一直累加）
             if status.state != PrinterState.RUNNING:
+                if status.state in (
+                    PrinterState.FINISH, PrinterState.FAILED, PrinterState.IDLE,
+                ):
+                    end_status = (
+                        "failed" if status.state == PrinterState.FAILED
+                        else "completed"
+                    )
+                    await self.db.record_print_end(serial, end_status)
                 continue
 
             gcode = status.gcode_file or ""
             # 初始化 gcode 追踪
             self._last_gcode[serial] = gcode
+            self._notify_job_gcode[serial] = gcode
             # 运行中任务一律标记已发（历史事件不补发）：
             # 启动时 MQTT 数据可能不完整（打印中却报 layer=0/0），
             # 若据此设为 False，后续首条完整消息会在中途层数误发通知
             self._layer3_notified[serial] = True
             self._progress50_notified[serial] = True
+            self._completed_notified[serial] = True
             # 同步更新 WeComNotifier 的状态，防止 gcode 变化误判
             if self.wecom_notifier and serial in self.wecom_notifier._states:
                 self.wecom_notifier._states[serial].last_gcode = gcode
                 self.wecom_notifier._states[serial].layer3_sent = True
                 self.wecom_notifier._states[serial].progress50_sent = True
+                self.wecom_notifier._states[serial].completed_sent = True
             logger.info(
                 "[启动扫描] 初始化 %s: layer=%d/%d progress=%d%% gcode=%s (运行中任务不补发通知)",
                 serial, status.current_layer, status.total_layers,
@@ -133,10 +150,6 @@ class PrintMonitor:
             serial: 打印机序列号
             status: 最新的打印机状态
         """
-        # 保存旧 gcode（用于 _check_progress_events 做变化检测）
-        self._prev_gcode[serial] = self._last_gcode.get(serial, "")
-        # 更新当前 gcode
-        self._last_gcode[serial] = status.gcode_file or ""
         await self._handle_state_change(serial, status)
         self._check_progress_events(serial, status)
 
@@ -184,14 +197,16 @@ class PrintMonitor:
 
         gcode = status.gcode_file or ""
 
-        # 检测新任务，重置层3/50%进度标记
-        # 通过 handle_status_update 调用时：_prev_gcode 保存了更旧的值
-        # 直接调用（如启动扫描）时：_prev_gcode 为空，fallback 到 _last_gcode
-        prev_gcode = self._prev_gcode.get(serial, self._last_gcode.get(serial, ""))
+        # 检测新任务，重置通知标记：与当前通知周期的任务比较。
+        # 不能逐条消息比较——任务切换往往发生在 FINISH/UNKNOWN 窗口，
+        # 等状态回到 RUNNING 时前后两条消息的 gcode 已看不到变化
         # 归一化后比较：云端任务名不含扩展名，MQTT 上报含 .3mf，避免误判新任务
-        if gcode and normalize_gcode(gcode) != normalize_gcode(prev_gcode):
+        job_gcode = self._notify_job_gcode.get(serial, "")
+        if gcode and normalize_gcode(gcode) != normalize_gcode(job_gcode):
+            self._notify_job_gcode[serial] = gcode
             self._layer3_notified[serial] = False
             self._progress50_notified[serial] = False
+            self._completed_notified[serial] = False
 
         # 事件1：到达第3层（>= 判断，MQTT 跳层上报也不会错过；标记防止重复；
         # progress<99 避免完成时补发 layer3）
@@ -219,10 +234,15 @@ class PrintMonitor:
             )
             self.wecom_notifier.notify(serial, "progress50", status)
 
-        # 事件3：进度达到完成阈值（99%，此时截图能拍到成品；wecom 层 completed_sent 去重）
+        # 事件3：进度达到完成阈值（99%，此时截图能拍到成品；标记防止
+        # 进度停在 99% 期间每条消息重复入队/刷日志）
         # 注意：RUNNING→FINISH 时 state 已变为 FINISH，_check_progress_events
         # 不会进入此分支，完成通知由 _handle_state_change 在检测到 FINISH 时兜底触发
-        if status.progress >= NOTIFY_COMPLETE_PROGRESS:
+        if (
+            not self._completed_notified.get(serial, False)
+            and status.progress >= NOTIFY_COMPLETE_PROGRESS
+        ):
+            self._completed_notified[serial] = True
             logger.info(
                 "触发完成通知(>=99%%): %s progress=%d file=%s",
                 serial, status.progress, gcode,
@@ -239,6 +259,7 @@ class PrintMonitor:
             # 状态不变时：仍需更新 _last_gcode（支持同一状态下的 gcode 变化检测）
             prev_gcode = self._last_gcode.get(serial, "")
             self._last_gcode[serial] = curr_gcode
+            self._update_definite_state(serial, curr_state)
             # 检测 gcode_file 变化（断线期间完成旧任务又开始新任务），归一化后比较
             if curr_state == PrinterState.RUNNING:
                 if (prev_gcode and curr_gcode
@@ -256,6 +277,7 @@ class PrintMonitor:
             logger.info("首次状态 %s: %s (仅初始化)", serial, curr_state.value)
             self._last_states[serial] = curr_state
             self._last_gcode[serial] = status.gcode_file
+            self._update_definite_state(serial, curr_state)
             if curr_state == PrinterState.RUNNING:
                 await self.db.record_print_start(serial, status.gcode_file)
             return
@@ -271,12 +293,35 @@ class PrintMonitor:
             PrinterState.RUNNING, PrinterState.PAUSE,
         ):
             await self.db.record_print_start(serial, status.gcode_file)
-            # 重置 completed_sent，允许新任务再次触发 completed 通知
-            if self.wecom_notifier and serial in self.wecom_notifier._states:
-                self.wecom_notifier._states[serial].completed_sent = False
+            # 区分真正的新任务和断线重连：上一个确定状态是 FINISH/FAILED/IDLE
+            # 说明旧任务已结束，本次 RUNNING 是新任务（即使重打同名文件也要重置通知）；
+            # 若确定状态是 RUNNING（如 RUNNING→UNKNOWN→RUNNING 断线重连）则不重置，
+            # 避免同一任务中途重复通知
+            definite = self._last_definite_state.get(serial)
+            if definite in (
+                PrinterState.FINISH, PrinterState.FAILED, PrinterState.IDLE,
+            ):
+                logger.info(
+                    "新任务开始，重置通知标记: %s file=%s", serial, curr_gcode,
+                )
+                self._notify_job_gcode[serial] = curr_gcode
+                self._layer3_notified[serial] = False
+                self._progress50_notified[serial] = False
+                self._completed_notified[serial] = False
+                # 同步重置 wecom 层去重标记（重打同名文件时 reset_if_new_job 不会重置）
+                if self.wecom_notifier and serial in self.wecom_notifier._states:
+                    st = self.wecom_notifier._states[serial]
+                    st.last_gcode = curr_gcode
+                    st.layer3_sent = False
+                    st.progress50_sent = False
+                    st.completed_sent = False
 
-        # 检测打印结束（PAUSE 不结束 session，打印仍在进行中）
-        elif prev_state == PrinterState.RUNNING and curr_state in (
+        # 检测打印结束（RUNNING 或 PAUSE 进入终态都要结算：
+        # 暂停中取消/失败走 PAUSE->FAILED，不结算会留下永久 running 的孤儿 session，
+        # 产能饱和度会把它一直算到当前时刻）
+        elif prev_state in (
+            PrinterState.RUNNING, PrinterState.PAUSE,
+        ) and curr_state in (
             PrinterState.FINISH, PrinterState.FAILED, PrinterState.IDLE,
         ):
             end_status = "completed" if curr_state in (
@@ -293,3 +338,9 @@ class PrintMonitor:
 
         self._last_states[serial] = curr_state
         self._last_gcode[serial] = status.gcode_file
+        self._update_definite_state(serial, curr_state)
+
+    def _update_definite_state(self, serial: str, state: PrinterState):
+        """记录最后一次确定状态（跳过 UNKNOWN/OFFLINE 这类断线中间态）"""
+        if state not in (PrinterState.UNKNOWN, PrinterState.OFFLINE):
+            self._last_definite_state[serial] = state

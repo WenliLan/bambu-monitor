@@ -819,6 +819,7 @@ class TestProgress50Notification:
         mon = monitor_with_wecom
         mon._last_states["S001"] = PrinterState.RUNNING
         mon._last_gcode["S001"] = "job.gcode"
+        mon._notify_job_gcode["S001"] = "job.gcode"  # 任务中途，避免首条消息被判为新任务
         mon._layer3_notified["S001"] = True  # 隔离 layer3
 
         s1 = _make_status("S001", PrinterState.RUNNING, "job.gcode",
@@ -838,6 +839,7 @@ class TestProgress50Notification:
         mon = monitor_with_wecom
         mon._last_states["S001"] = PrinterState.RUNNING
         mon._last_gcode["S001"] = "job.gcode"
+        mon._notify_job_gcode["S001"] = "job.gcode"  # 任务中途，避免首条消息被判为新任务
         mon._layer3_notified["S001"] = True  # 隔离 layer3
 
         s = _make_status("S001", PrinterState.RUNNING, "job.gcode",
@@ -946,6 +948,7 @@ class TestGcodeNormalization:
         # 模拟启动扫描：云端任务名（无扩展名）+ 标记已发
         mon._last_states["S001"] = PrinterState.RUNNING
         mon._last_gcode["S001"] = "CUBE_2.4 wide"
+        mon._notify_job_gcode["S001"] = "CUBE_2.4 wide"
         mon._layer3_notified["S001"] = True
         mon._progress50_notified["S001"] = True
         wecom._states["S001"].last_gcode = "CUBE_2.4 wide"
@@ -966,6 +969,109 @@ class TestGcodeNormalization:
                           current_layer=3, total_layers=100, progress=3)
         mon._check_progress_events("S001", s2)
         assert wecom._queue.qsize() == 1
+
+
+# ---------------------------------------------------------------------------
+# TC-NOTIFY-48~50: 新任务重置时机（FINISH 窗口切任务 / 同名重打 / 断线重连）
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+class TestNewJobResetTiming:
+    async def test_tc_notify_48_gcode_flip_in_finish_window(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-48: 任务切换发生在 FINISH 窗口，回到 RUNNING 后仍能重置并触发 layer3
+
+        回归场景：gcode 翻转时状态非 RUNNING，逐条消息比较看不到变化，
+        旧逻辑下标记永不重置导致新任务漏发通知。
+        """
+        mon = monitor_with_wecom
+        # job1 已完成通知周期
+        mon._last_states["S001"] = PrinterState.FINISH
+        mon._last_gcode["S001"] = "job1.3mf"
+        mon._notify_job_gcode["S001"] = "job1.3mf"
+        mon._layer3_notified["S001"] = True
+        mon._progress50_notified["S001"] = True
+
+        # FINISH 窗口内 gcode 已翻转为 job2，不处理进度事件
+        s_finish = _make_status("S001", PrinterState.FINISH, "job2.3mf",
+                                current_layer=0, total_layers=0, progress=0)
+        mon._check_progress_events("S001", s_finish)
+        assert mock_wecom_notifier.notify.call_count == 0
+
+        # 回到 RUNNING：与当前通知周期任务（job1）比较检测到新任务，重置并触发
+        s_run = _make_status("S001", PrinterState.RUNNING, "job2.3mf",
+                             current_layer=3, total_layers=100, progress=2)
+        mon._check_progress_events("S001", s_run)
+        events = [c[0][1] for c in mock_wecom_notifier.notify.call_args_list]
+        assert events == [EVENT_LAYER3]
+
+    async def test_tc_notify_49_reprint_same_file_resets(self, mock_manager, mock_db, broadcast_calls):
+        """TC-NOTIFY-49: 打完后重打同名文件，FINISH→RUNNING 重置两层标记可再次通知"""
+        _, calls = broadcast_calls
+        from bumbo_stats.config import PrinterConfig
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
+        wecom._queue = asyncio.Queue(maxsize=10)
+        wecom._chatid = "test_chatid"
+        mon = PrintMonitor(mock_manager, mock_db, broadcast_calls[0], wecom)
+
+        # job 已打完一单：两层标记均为已发
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_definite_state["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "CUBE.3mf"
+        mon._notify_job_gcode["S001"] = "CUBE.3mf"
+        mon._layer3_notified["S001"] = True
+        mon._progress50_notified["S001"] = True
+        mon._completed_notified["S001"] = True
+        wecom._states["S001"].last_gcode = "CUBE.3mf"
+        wecom._states["S001"].layer3_sent = True
+        wecom._states["S001"].progress50_sent = True
+        wecom._states["S001"].completed_sent = True
+
+        # RUNNING -> FINISH（completed 已去重不入队）
+        await mon._handle_state_change("S001", _make_status(
+            "S001", PrinterState.FINISH, "CUBE.3mf",
+            current_layer=100, total_layers=100, progress=100))
+        assert wecom._queue.qsize() == 0
+
+        # FINISH -> RUNNING 重打同名文件：确定状态为 FINISH，判为新任务重置两层标记
+        await mon._handle_state_change("S001", _make_status(
+            "S001", PrinterState.RUNNING, "CUBE.3mf",
+            current_layer=0, total_layers=100, progress=0))
+        assert mon._layer3_notified["S001"] is False
+        assert wecom._states["S001"].layer3_sent is False
+
+        # 到第3层触发通知
+        mon._check_progress_events("S001", _make_status(
+            "S001", PrinterState.RUNNING, "CUBE.3mf",
+            current_layer=3, total_layers=100, progress=2))
+        assert wecom._queue.qsize() == 1
+
+    async def test_tc_notify_50_reconnect_same_job_no_duplicate(self, monitor_with_wecom, mock_wecom_notifier):
+        """TC-NOTIFY-50: RUNNING→UNKNOWN→RUNNING 断线重连同一任务不重置、不重复通知"""
+        mon = monitor_with_wecom
+        mon._last_states["S001"] = PrinterState.RUNNING
+        mon._last_definite_state["S001"] = PrinterState.RUNNING
+        mon._last_gcode["S001"] = "CUBE.3mf"
+        mon._notify_job_gcode["S001"] = "CUBE.3mf"
+        mon._layer3_notified["S001"] = True
+        mon._progress50_notified["S001"] = True
+
+        # 断线：RUNNING -> UNKNOWN（确定状态仍为 RUNNING）
+        await mon._handle_state_change("S001", _make_status(
+            "S001", PrinterState.UNKNOWN, "CUBE.3mf",
+            current_layer=50, total_layers=100, progress=50))
+        # 重连：UNKNOWN -> RUNNING，同一任务中途，不应重置标记
+        await mon._handle_state_change("S001", _make_status(
+            "S001", PrinterState.RUNNING, "CUBE.3mf",
+            current_layer=52, total_layers=100, progress=52))
+        assert mon._layer3_notified["S001"] is True
+        assert mon._progress50_notified["S001"] is True
+
+        # 后续消息也不会补发
+        mon._check_progress_events("S001", _make_status(
+            "S001", PrinterState.RUNNING, "CUBE.3mf",
+            current_layer=53, total_layers=100, progress=53))
+        assert mock_wecom_notifier.notify.call_count == 0
 
 
 # ---------------------------------------------------------------------------
