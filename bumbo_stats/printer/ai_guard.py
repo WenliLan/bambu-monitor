@@ -296,10 +296,6 @@ class AIGuardLoop:
             await self._trigger_alarm(serial, status, triggered_alert, recent_frames)
             self._last_alarm_ts[serial] = time.time()
             self._detector.reset()
-        else:
-            # 正常：每帧独立保存到 normal_review
-            for f, p in zip(all_frames, all_probs):
-                await asyncio.to_thread(self._save_frame, f, p, serial)
 
     async def _run_inference(self, frame):
         """在子线程中执行推理（便于测试 mock）"""
