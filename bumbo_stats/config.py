@@ -34,6 +34,10 @@ class AppSettings(BaseModel):
 
 class WeComSettings(BaseModel):
     """企业微信机器人配置"""
+    enabled: bool = Field(
+        default=True,
+        description="是否启用企业微信通知（总开关）。关闭后所有事件均不入队、不发送",
+    )
     bot_id: str = Field(default="", description="智能机器人 Bot ID")
     secret: str = Field(default="", description="智能机器人 Secret")
     chatid: str = Field(default="", description="群聊 chatid，留空则自动发现")
@@ -50,8 +54,35 @@ class FeishuSettings(BaseModel):
     chatid: str = Field(default="", description="群聊 Chat ID")
     enabled: bool = Field(default=False, description="是否启用飞书通知")
     layer3: bool = Field(default=True, description="打印到第3层时发送通知")
+    progress50: bool = Field(default=True, description="打印进度达到50%时发送通知")
     completed: bool = Field(default=True, description="打印完成时发送通知")
     error: bool = Field(default=True, description="HMS 错误时发送通知")
+    # 应用内加急（urgent_app）：让指定用户的飞书客户端强制弹窗 + 响铃
+    urgent_user_id: str = Field(
+        default="",
+        description="被加急的飞书用户 open_id（多个用英文逗号分隔），配置后该用户在飞书客户端会收到强制弹窗 + 响铃提醒",
+    )
+    urgent_on_events: list[str] = Field(
+        default_factory=lambda: ["error"],
+        description="触发应用内加急的事件列表，可选: layer3 / progress50 / completed / error / ai_alarm",
+    )
+    urgent_max_per_hour: int = Field(
+        default=10,
+        description="单用户每小时最多加急次数（防止骚扰），0 表示不限制",
+    )
+
+
+class AIGuardSettings(BaseModel):
+    """AI 异常报警配置"""
+    enabled: bool = Field(default=True, description="是否启用 AI 异常报警")
+    interval: int = Field(default=600, description="检测间隔（秒），默认 10 分钟")
+    frames_per_check: int = Field(default=10, description="每次检测抓帧数量")
+    model: str = Field(default="fff_gray", description="检测模型: dino_ft / fff_gray")
+    track: str = Field(default="adapted", description="模型轨道: adapted / zero")
+    threshold: float = Field(default=0.0, description="分类阈值，0 表示使用模型推荐默认值")
+    alert_frames: int = Field(default=3, description="连续 N 帧异常才触发报警")
+    cooldown: int = Field(default=1800, description="报警冷却时间（秒），默认 30 分钟")
+    alert_dir: str = Field(default="./data/alerts_review", description="报警图片保存目录")
 
 
 class UiSettings(BaseModel):
@@ -66,6 +97,7 @@ class AppConfig(BaseModel):
     settings: AppSettings = Field(default_factory=AppSettings)
     wecom: WeComSettings = Field(default_factory=WeComSettings)
     feishu: FeishuSettings = Field(default_factory=FeishuSettings)
+    ai_guard: AIGuardSettings = Field(default_factory=AIGuardSettings)
     ui: UiSettings = Field(default_factory=UiSettings)
     # 配置文件来源路径（不写入 YAML）；save_yaml 默认写回此路径，
     # 避免测试等场景下误覆盖工作目录中的真实 printers.yaml
@@ -80,6 +112,7 @@ class AppConfig(BaseModel):
             "settings": self.settings.model_dump(),
             "wecom": self.wecom.model_dump(),
             "feishu": self.feishu.model_dump(),
+            "ai_guard": self.ai_guard.model_dump(),
             "ui": self.ui.model_dump(),
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -135,7 +168,8 @@ def load_config(config_path: str = "printers.yaml") -> AppConfig:
     settings = AppSettings(**data.get("settings", {}))
     wecom = WeComSettings(**data.get("wecom", {}))
     feishu = FeishuSettings(**data.get("feishu", {}))
+    ai_guard = AIGuardSettings(**data.get("ai_guard", {}))
     ui = UiSettings(**data.get("ui", {}))
 
     return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom,
-                     feishu=feishu, ui=ui, config_path=str(path))
+                     feishu=feishu, ai_guard=ai_guard, ui=ui, config_path=str(path))

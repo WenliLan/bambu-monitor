@@ -134,9 +134,14 @@ class TestEdgeCaseTransitions:
         monitor.db.record_print_end.assert_called_once_with("S001", "completed")
 
     async def test_tc_mon_11_pause_to_running_no_trigger(self, monitor):
-        """TC-MON-11: PAUSE->RUNNING 不触发新 session（保持同一打印任务连续性）"""
+        """TC-MON-11: PAUSE->RUNNING 不触发新 session（保持同一打印任务连续性）
+
+        需要预先设置 _pause_layer 为 >0（中途暂停恢复场景）。
+        layer=0 时会被识别为新任务（PAUSE 是切片后等待开始的占位状态）。
+        """
         monitor._last_states["S001"] = PrinterState.PAUSE
         monitor._last_gcode["S001"] = "paused.gcode"
+        monitor._pause_layer["S001"] = 5  # 中途暂停
         await monitor._handle_state_change(
             "S001", _make_status("S001", PrinterState.RUNNING, gcode_file="paused.gcode")
         )
@@ -268,3 +273,39 @@ class TestStartLoop:
             pass
         # snapshot_yesterday 应被调用过至少一次
         monitor.db.snapshot_yesterday.assert_called()
+
+    async def test_tc_mon_23_startup_settles_orphan_with_heartbeat(self, monitor):
+        """TC-MON-23: 启动扫描用心跳时刻结算孤儿 session（停机期不算打印时长）"""
+        heartbeat = datetime(2026, 8, 8, 23, 27, 47)
+        monitor.db.get_last_heartbeat = AsyncMock(return_value=heartbeat)
+        monitor.manager.get_all_statuses = MagicMock(return_value={
+            "S001": _make_status("S001", PrinterState.FINISH),
+        })
+        await monitor._scan_startup_notifications()
+        monitor.db.record_print_end.assert_called_once_with(
+            "S001", "completed", end_time=heartbeat
+        )
+
+    async def test_tc_mon_24_startup_settles_orphan_no_heartbeat(self, monitor):
+        """TC-MON-24: 无心跳记录时退化为当前时间结算（end_time=None）"""
+        monitor.db.get_last_heartbeat = AsyncMock(return_value=None)
+        monitor.manager.get_all_statuses = MagicMock(return_value={
+            "S001": _make_status("S001", PrinterState.FAILED),
+        })
+        await monitor._scan_startup_notifications()
+        monitor.db.record_print_end.assert_called_once_with(
+            "S001", "failed", end_time=None
+        )
+
+    async def test_tc_mon_25_start_writes_heartbeat(self, monitor):
+        """TC-MON-25: start() 启动时立即写一次心跳"""
+        import asyncio
+        monitor.manager.get_all_statuses = MagicMock(return_value={})
+        task = asyncio.create_task(monitor.start(broadcast_interval=0.05))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        monitor.db.update_heartbeat.assert_called()

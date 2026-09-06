@@ -17,6 +17,8 @@ from ..printer.camera import CameraManager
 from ..printer.manager import PrinterManager
 from ..printer.monitor import PrintMonitor
 from ..printer.wecom import WeComNotifier, WeComConfig
+from ..printer.feishu import FeishuNotifier, FeishuConfig
+from ..printer.ai_guard import AIGuardLoop
 from .routes import router
 from .websocket import ConnectionManager
 
@@ -26,12 +28,15 @@ logger = logging.getLogger(__name__)
 _monitor_task: asyncio.Task | None = None
 _camera_task: asyncio.Task | None = None
 _reconnect_task: asyncio.Task | None = None
+_ai_guard: AIGuardLoop | None = None
 _wecom_notifier: WeComNotifier | None = None
+_feishu_notifier: FeishuNotifier | None = None
 _ws_manager: ConnectionManager = ConnectionManager()
 
 # 运行时重载函数（在 create_app 中注册到 app.state）
 _reload_printers_fn = None
 _reload_wecom_fn = None
+_reload_feishu_fn = None
 
 
 async def _broadcast(message: dict):
@@ -87,8 +92,13 @@ async def _reload_printers_impl(new_printers: list[PrinterConfig]):
 
 
 async def _reload_wecom_impl(new_wecom: WeComConfig):
-    """运行时重载企业微信配置"""
-    global _reload_wecom_fn
+    """运行时重载企业微信配置
+
+    使用 WeComNotifier.update_config 更新内存中的配置；
+    当 enabled 状态发生变化时，同步启停后台任务：
+    - 关闭：停止 WeComNotifier（释放 WebSocket 连接）
+    - 开启：启动 WeComNotifier（重建连接，接收群聊指令）
+    """
     wecom = None
     for attr in ["_wecom_notifier"]:
         if hasattr(router, "_app") and hasattr(router._app.state, attr):
@@ -98,21 +108,40 @@ async def _reload_wecom_impl(new_wecom: WeComConfig):
         logger.warning("无法获取 wecom_notifier 实例")
         return
 
-    # 更新配置
-    wecom._cfg = new_wecom
-    # 优先使用配置的 chatid，其次保持已自动发现的 chatid
-    if new_wecom.chatid:
-        wecom._chatid = new_wecom.chatid
-    logger.info("企业微信配置已重载: layer3=%s progress50=%s completed=%s error=%s",
-                new_wecom.layer3, getattr(new_wecom, "progress50", True),
-                new_wecom.completed, new_wecom.error)
+    # update_config 返回 enabled 是否发生变化
+    changed = wecom.update_config(new_wecom)
+    if changed:
+        if new_wecom.enabled:
+            logger.info("企业微信总开关打开，启动后台任务")
+            await wecom.start()
+        else:
+            logger.info("企业微信总开关关闭，停止后台任务")
+            await wecom.stop()
+
+
+async def _reload_feishu_impl(new_feishu: FeishuConfig):
+    """运行时重载飞书配置"""
+    global _reload_feishu_fn
+    feishu = None
+    for attr in ["_feishu_notifier"]:
+        if hasattr(router, "_app") and hasattr(router._app.state, attr):
+            feishu = getattr(router._app.state, attr)
+            break
+    if not feishu:
+        logger.warning("无法获取 feishu_notifier 实例")
+        return
+
+    feishu.update_config(new_feishu)
+    # 更新 chatid
+    if new_feishu.chatid:
+        feishu._cfg.chatid = new_feishu.chatid
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动/停止后台任务"""
     global _monitor_task, _camera_task, _reconnect_task, _wecom_notifier
-    global _reload_printers_fn, _reload_wecom_fn
+    global _reload_printers_fn, _reload_wecom_fn, _ai_guard
 
     config: AppConfig = app.state.config
     _started_internally = False
@@ -120,6 +149,7 @@ async def lifespan(app: FastAPI):
     # 注册重载函数到 app.state（供 routes.py 中的 API 调用）
     app.state._reload_printers = _reload_printers_impl
     app.state._reload_wecom = _reload_wecom_impl
+    app.state._reload_feishu = _reload_feishu_impl
     router._app = app  # 供重载函数访问 app
 
     # 如果测试已注入 mock 对象，跳过初始化
@@ -205,11 +235,17 @@ async def lifespan(app: FastAPI):
                 manager._status_cache[serial] = status
                 manager._print_data_cache[serial] = initial_data
 
+        # 启动补录：停机前就在打印的任务结算到上次心跳时刻（而非重启时刻），
+        # 避免把整个停机期误算为打印时长；心跳不存在时退化为当前时间
+        last_heartbeat = await db.get_last_heartbeat()
+        if last_heartbeat is not None:
+            logger.info("检测到上次心跳: %s，补录结算将以此时刻封顶", last_heartbeat.isoformat())
+
         for serial, status in manager._status_cache.items():
             monitor._last_states[serial] = status.state
             monitor._last_gcode[serial] = status.gcode_file
             if status.state == PrinterState.RUNNING:
-                await db.record_print_start(serial, status.gcode_file)
+                await db.record_print_start(serial, status.gcode_file, settle_time=last_heartbeat)
                 logger.info("启动补录: %s 正在打印 %s", serial, status.gcode_file)
 
         # 7. 初始化摄像头管理器
@@ -218,10 +254,13 @@ async def lifespan(app: FastAPI):
         app.state._camera = camera
 
         # 8. 初始化企业微信通知模块（可选）
+        # 只要配置了 bot_id/secret 就创建实例，确保运行时重载能找到 notifier；
+        # 实际后台任务的启动由 WeComNotifier.start() 根据 enabled 自行决定。
         global _wecom_notifier
         if config.wecom.bot_id and config.wecom.secret:
             _wecom_notifier = WeComNotifier(
                 wecom_config=WeComConfig(
+                    enabled=config.wecom.enabled,
                     bot_id=config.wecom.bot_id,
                     secret=config.wecom.secret,
                     chatid=config.wecom.chatid,
@@ -238,12 +277,70 @@ async def lifespan(app: FastAPI):
             await _wecom_notifier.start()
             monitor.wecom_notifier = _wecom_notifier
             app.state._wecom_notifier = _wecom_notifier
-            logger.info("企业微信通知模块已启用")
+            if config.wecom.enabled:
+                logger.info("企业微信通知模块已启用")
+            else:
+                logger.info("企业微信通知模块已初始化（总开关 enabled=False，暂不启动后台任务）")
+
+        # 8b. 初始化飞书通知模块（可选）
+        global _feishu_notifier
+        if config.feishu.enabled and config.feishu.app_id and config.feishu.app_secret:
+            _feishu_notifier = FeishuNotifier(
+                feishu_config=FeishuConfig(
+                    app_id=config.feishu.app_id,
+                    app_secret=config.feishu.app_secret,
+                    chatid=config.feishu.chatid,
+                    layer3=config.feishu.layer3,
+                    progress50=config.feishu.progress50,
+                    completed=config.feishu.completed,
+                    error=config.feishu.error,
+                    urgent_user_id=config.feishu.urgent_user_id,
+                    urgent_on_events=list(config.feishu.urgent_on_events),
+                    urgent_max_per_hour=config.feishu.urgent_max_per_hour,
+                ),
+                printer_configs=config.printers,
+                camera_manager=camera,
+                printer_manager=manager,
+                db=db,
+            )
+            await _feishu_notifier.start()
+            monitor.feishu_notifier = _feishu_notifier
+            app.state._feishu_notifier = _feishu_notifier
+            logger.info("飞书通知模块已启用 (chatid=%s, urgent_users=%s, urgent_events=%s)",
+                        config.feishu.chatid, config.feishu.urgent_user_id,
+                        config.feishu.urgent_on_events)
 
         # 9. 启动后台任务
         _monitor_task = asyncio.create_task(monitor.start())
         _camera_task = asyncio.create_task(camera.capture_all_loop(config.settings.camera_interval))
         _reconnect_task = asyncio.create_task(_reconnect_loop(manager))
+
+        # 10. 启动 AI 异常报警模块
+        # 阈值持久化回调：修改内存值的同时写回 printers.yaml，
+        # 这样群指令修改后重启服务仍然生效（避免仅临时生效的问题）
+        def _persist_threshold(new_val: float) -> None:
+            config.ai_guard.threshold = new_val
+            config.save_yaml()
+            logger.info("AI 检测阈值已持久化到 printers.yaml: %.2f", new_val)
+
+        _ai_guard = AIGuardLoop(
+            ai_config=config.ai_guard,
+            camera_manager=camera,
+            printer_manager=manager,
+            ws_manager=_ws_manager,
+            wecom_notifier=_wecom_notifier,
+            feishu_notifier=_feishu_notifier,
+            camera_interval=config.settings.camera_interval,
+            on_threshold_changed=_persist_threshold,
+        )
+        await _ai_guard.start()
+        app.state._ai_guard = _ai_guard
+
+        # 把 ai_guard 注入到通知模块（用于支持阈值指令）
+        if _wecom_notifier is not None:
+            _wecom_notifier.bind_ai_guard(_ai_guard)
+        if _feishu_notifier is not None:
+            _feishu_notifier.bind_ai_guard(_ai_guard)
 
         logger.info("Bumbo Stats 已启动，监控 %d 台打印机", len(config.printers))
 
@@ -257,8 +354,12 @@ async def lifespan(app: FastAPI):
             _camera_task.cancel()
         if _reconnect_task:
             _reconnect_task.cancel()
+        if _ai_guard:
+            _ai_guard.stop()
         if _wecom_notifier:
             await _wecom_notifier.stop()
+        if _feishu_notifier:
+            await _feishu_notifier.stop()
         if hasattr(app.state, "printer_manager"):
             await app.state.printer_manager.disconnect_all()
         if hasattr(app.state, "camera_manager"):

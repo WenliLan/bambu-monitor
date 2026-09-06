@@ -1,0 +1,242 @@
+{
+  "summary": {
+    "projectName": "bumbo_stats",
+    "locale": "zh-CN",
+    "modelId": "agent-work-loop-v4",
+    "reportContractVersion": 26,
+    "overview": "bumbo_stats（拓竹 3D 打印机云端监控系统）在交付机制（DESIGN.md、218 个测试、Snapshot 产能、企业微信/飞书通知）上具备良好基础，但 AI Agent 实践层未贯通：项目缺少 AGENTS.md/CLAUDE.md 任务入口与项目级 Skill/Command/MCP/Workflow；会话样本显示编辑后无自动验证、2 个长会话（最长 936 分钟）未做结果复核；用户全局 Skill 用户全局 Skill（<user-skill>）存在命名不匹配与无渐进式披露；两个 Qoder 插件家族名称相似度 70% 名称相似度。整体处于 Operationalize（1 → 60）阶段。",
+    "dimensions": [
+      {
+        "id": "task-understanding",
+        "label": "任务理解",
+        "score": 38,
+        "summary": "根目录有 DESIGN.md 作为视觉与功能设计合约，但 5 个源根（bumbo_stats/、bumbo_stats/printer/、bumbo_stats/api/、bumbo_stats/static/、.）均无 AGENTS.md/CLAUDE.md 与项目级 Skill/Command，新会话智能体只能从 DESIGN.md 与文件名推断任务边界与验证入口。"
+      },
+      {
+        "id": "controlled-execution",
+        "label": "可控执行",
+        "score": 48,
+        "summary": "tests/ 目录包含 19 个测试文件，database.py/monitor.py 100% 行覆盖；但 24 个会话样本中 317 个编辑事件之后没有观察到任何后续验证命令（pytest/ruff/curl），表明受控执行未在 Agent 工作流中触发。"
+      },
+      {
+        "id": "change-validation",
+        "label": "改动验证",
+        "score": 55,
+        "summary": "项目已为 database.py、monitor.py 与精确数值用例提供 100% 覆盖的强验证；但 wecom.py（90 天 2136 churn）与 database.py（14 文件 833 行差异）等热改文件没有对应的回归检查固化到 Agent 编辑循环。"
+      },
+      {
+        "id": "reliable-delivery",
+        "label": "可靠交付",
+        "score": 62,
+        "summary": "Snapshot 幂等、MQTT 断线重连、wecom layer3/completed 去重、设置 API 鉴权与 Cookie HttpOnly/SameSite 已就绪；session evidence 中失败事件 3 次未关联恢复路径，但失败信号未串联到可执行恢复手册。"
+      },
+      {
+        "id": "learning-capture",
+        "label": "经验沉淀",
+        "score": 35,
+        "summary": "outcomeReview.status=required、reviewedActiveLongCount=0：2 个活跃长会话（最长 936.2 分钟）未做任务族/结果/摩擦分类；用户全局 <user-skill> 的命名不匹配与插件家族重叠均未进入修复通道；尚无可比的后置改进窗口。"
+      }
+    ],
+    "aiAgentPractice": {
+      "inspectedSurfaces": [
+        "Rules",
+        "Skills",
+        "Hooks",
+        "Plugins",
+        "Memories",
+        "Commands",
+        "Custom Agents",
+        "MCP",
+        "Workflows"
+      ],
+      "coverageRows": [
+        {
+          "surface": "Rules",
+          "scopes": [
+            "Project"
+          ],
+          "count": 1,
+          "paths": [
+            "DESIGN.md"
+          ]
+        },
+        {
+          "surface": "Skills",
+          "scopes": [
+            "Global",
+            "Plugin"
+          ],
+          "count": 5,
+          "paths": [
+            "<user-home>/.qoder/skills/skill-safety-checker/SKILL.md",
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/better-harness/skills/better-harness/SKILL.md",
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/qoder-create-plugin/skills/create-plugin/SKILL.md",
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/qoder-harness/skills/harness/SKILL.md",
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/security-scan/skills/security-scan/SKILL.md"
+          ]
+        },
+        {
+          "surface": "Hooks",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 2,
+          "paths": [
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/security-scan/.qoder-plugin/qoder-hooks.json"
+          ]
+        },
+        {
+          "surface": "Plugins",
+          "scopes": [
+            "Plugin"
+          ],
+          "count": 4,
+          "paths": [
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/better-harness/.qoder-plugin/plugin.json",
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/qoder-create-plugin",
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/qoder-harness/.qoder-plugin/plugin.json",
+            "<user-home>/.qoder/plugins/cache/qoder-bundler/security-scan/.qoder-plugin/plugin.json"
+          ]
+        },
+        {
+          "surface": "Memories",
+          "scopes": [
+            "Global"
+          ],
+          "count": 5,
+          "paths": []
+        },
+        {
+          "surface": "Commands",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0,
+          "paths": []
+        },
+        {
+          "surface": "Custom Agents",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0,
+          "paths": []
+        },
+        {
+          "surface": "MCP",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0,
+          "paths": []
+        },
+        {
+          "surface": "Workflows",
+          "scopes": [
+            "Project"
+          ],
+          "count": 0,
+          "paths": []
+        }
+      ],
+      "memoryDetails": {
+        "contentPolicy": "metadata-only",
+        "scanState": "scanned-present",
+        "scopeCounts": [
+          {
+            "scope": "Global",
+            "count": 5
+          }
+        ],
+        "integrity": {
+          "status": "reviewed",
+          "titleCount": 5,
+          "reviewedTitleCount": 5,
+          "truncated": false,
+          "exactCollisionGroups": 0,
+          "similarityCandidates": 0
+        }
+      }
+    }
+  },
+  "findings": [
+    {
+      "id": "agent-task-entrypoint-missing",
+      "title": "缺少 AI Agent 任务入口文档，新会话智能体只能靠 DESIGN.md 推断工作边界",
+      "severity": "Medium",
+      "reason": "证据 bundle 的 projectHarness 通道显示 agentInstructions.status=missing、count=0：项目根及其 4 个源根（bumbo_stats/、bumbo_stats/printer/、bumbo_stats/api/、bumbo_stats/static/）均无 AGENTS.md/CLAUDE.md，也无项目级 Skill/Command/Custom Agent/MCP/Workflow。bumbo_stats/ 拥有 21 个 Python 源文件、19 个测试文件，DESIGN.md（753 行）是唯一 Rules 资产，但它的内容是视觉与功能合约，并未给 Agent 提供：任务范围说明（FastAPI+SQLite+MQTT 监控服务）、常见入口（python -m bumbo_stats.main serve/login）、验证命令（python -m pytest tests/）、关键约束（pytest-asyncio 自动模式、wecom/feishu 配置从 printers.yaml 读取、printers.yaml 在 .gitignore）。结果是新会话必须先大段阅读源码才能理解工作边界，无法保证不同会话使用一致的入口与验证步骤。",
+      "dimensionRefs": [
+        "task-understanding",
+        "controlled-execution"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n为 bumbo_stats 项目添加最小的 AGENTS.md 任务入口，覆盖 agentInstructions.suggestedScopes 给出的 5 个根范围。\n\n## 现状\n\n- 项目根与子目录均无 AGENTS.md/CLAUDE.md\n- DESIGN.md（753 行）只在 Rules 计数里 1 项，且是视觉/功能合约，不承担 Agent 任务入口\n- 项目级 Skill/Command/Custom Agent/MCP/Workflow 均为 0\n\n## 怎么算完成\n\n1. 在仓库根创建 AGENTS.md，内容至少覆盖：\n   - 一句话定位：bumbo_stats 是拓竹 3D 打印机云端监控面板（FastAPI+SQLite+MQTT+WebSocket）\n   - 入口：`python -m bumbo_stats.main login` 获取 Token；`python -m bumbo_stats.main serve --host 0.0.0.0 --debug` 启动\n   - 测试入口：`python -m pytest tests/`（asyncio_mode=auto）\n   - 关键约束：printers.yaml 在 .gitignore，敏感凭据（wecom secret、access_code、token）见 SECURITY_REVIEW.md\n   - 关键目录：bumbo_stats/api（HTTP/WebSocket）、bumbo_stats/printer（MQTT/相机/通知）、bumbo_stats/database.py（产能与快照）、bumbo_stats/printer/monitor.py（状态机）\n   - 修改后必跑：`python -m pytest tests/test_database.py tests/test_monitor.py tests/test_numerical.py`（database.py + monitor.py 100% 覆盖目标）\n2. 在 bumbo_stats/printer/AGENTS.md 写入：MQTT 状态机、wecom.py 去重规则（layer3/completed）、HMS 错误合并、HMS 错误码常量表。\n3. 不新增项目级 Skill/Command/MCP/Workflow（本次仅补 Rules 入口）。\n\n## 验证\n\n- `git ls-files | grep -i AGENTS.md` 应至少返回 2 个新条目（根 + bumbo_stats/printer/）\n- 在新会话中，仅通过 AGENTS.md 即可定位到 serve/login/pytest 入口而不需要读源码\n- 复核后再跑 `python -m pytest tests/` 应保持通过\n\n## 范围\n\n只新增/编辑仓库内的 AGENTS.md；不修改 pyproject.toml、DESIGN.md 或任何运行时代码；不创建项目级 Skill/Command/MCP/Workflow。",
+      "expectedArtifact": "Document",
+      "expectedOutput": [
+        "在仓库根与 bumbo_stats/printer/ 新增 AGENTS.md，把 serve/login/pytest 入口、敏感凭据约束、关键目录与改动后必跑测试写成 Agent 一眼可读的几条。"
+      ],
+      "kind": "missing-mechanism"
+    },
+    {
+      "id": "post-edit-validation-not-wired",
+      "title": "Agent 编辑循环里没有自动验证步骤，317 次编辑后没有观察到任何后续检查命令",
+      "severity": "Medium",
+      "reason": "会话证据通道显示 24 个会话、312 个 episode、317 个编辑事件（id=session-insight:post-edit-validation, labels=[post-edit-validation, High]），但同一样本中没有任何 validation 命令类别被观察到（id=session-insight:validation-behavior, labels=[validation-behavior, Low]）。bumbo_stats 的 tests/ 目录已具备 218 个测试且 database.py/monitor.py 100% 覆盖，pytest-asyncio=auto 已配置；当前事实是 Agent 拿到编辑工具后直接落盘，没有自动触发 `python -m pytest tests/test_database.py tests/test_monitor.py` 或等价命令的步骤。这意味着每次修改都要依赖后续会话人工回忆运行测试，回归风险与最近 churn 高位文件（wecom.py 90 天 +1590/-546 行、database.py 本次 +833 行）叠加。",
+      "dimensionRefs": [
+        "controlled-execution",
+        "change-validation"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n在 Agent 编辑循环里加入最小的 post-edit 验证步骤，覆盖 bumbo_stats 现有 pytest 入口。\n\n## 现状\n\n- 24 个会话、317 个编辑事件之后没有观察到任何后续验证命令\n- 现有测试入口：`python -m pytest tests/`（pyproject.toml 已设置 asyncio_mode=auto）\n- database.py/monitor.py 改动后推荐覆盖目标：`tests/test_database.py tests/test_monitor.py tests/test_numerical.py`\n\n## 怎么算完成\n\n1. 创建项目级 Skill `bumbo_stats/.qoder/skills/post-edit-pytest/SKILL.md`，或在 AGENTS.md 内显式列出「编辑后必跑」规则：\n   - 触发条件：当改动命中 `bumbo_stats/database.py` 或 `bumbo_stats/printer/monitor.py` 时，运行 `python -m pytest tests/test_database.py tests/test_monitor.py tests/test_numerical.py -x`\n   - 触发条件：当改动命中 `bumbo_stats/printer/wecom.py` 或 `bumbo_stats/printer/feishu.py` 时，运行 `python -m pytest tests/test_wecom_notify.py tests/test_feishu_notify.py -x`\n   - 触发条件：其它 Python 改动运行 `python -m pytest tests/ -x`\n2. 在 AGENTS.md 的「修改后必跑」段落引用以上 Skill 名（不复制全文）。\n3. 不创建 Hook（Hook 优先 security-scan 已有覆盖面；本次只加 Skill + 文档引用）。\n4. 不修改 pytest.ini/pyproject.toml 的现有 asyncio_mode=auto 设置。\n\n## 验证\n\n- 在新会话里触发命中 database.py 的小改动，工具链应在 edit 之后出现至少一次 pytest 调用\n- `python -m pytest tests/` 自身保持全绿\n\n## 范围\n\n只新增 bumbo_stats/.qoder/skills/post-edit-pytest/SKILL.md 与 AGENTS.md 引用，不创建 Hook、不改 pyproject.toml、不改任何运行时代码。",
+      "expectedArtifact": "Skill",
+      "expectedOutput": [
+        "Agent 命中 database.py/monitor.py 或 wecom.py/feishu.py 改动后自动跑对应 pytest 子集，并保持完整测试套件绿。"
+      ],
+      "kind": "missing-mechanism"
+    },
+    {
+      "id": "long-sessions-missing-outcome-review",
+      "title": "2 个超阈值长会话未做结果复核，无法判断效率或任务拆分问题",
+      "severity": "Low",
+      "reason": "usageEfficiency 通道显示 24 个会话中有 2 个（activeCount=2, activeRatio=8.3%）超过估算活跃时长阈值，最长样本 两个样本为子 Agent 候选，估算活跃时长分别约 936.2 分钟（≈15.6 小时）和 86.2 分钟；outcomeReview.status=required、reviewedActiveLongCount=0、comparableModelOutcomeEvidence=false、sampleCoverage.shown=2/total=2/complete=true。证据同时声明「未复核前无法区分复杂任务、工具链摩擦、暂停恢复噪音或正常的长任务」。bumbo_stats 在 30 天内已落 75 个变更文件、14 个非生成文件 +3527/-2304 行，最近 v0.5.3 → v0.5.6 连续修 bug，存在真实风险被长会话掩盖（layer3 漏发、PAUSE 终态产能虚增、SQLite :memory: 问题）。",
+      "dimensionRefs": [
+        "learning-capture",
+        "reliable-delivery"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n复核两个超阈值长会话候选，并完成 outcomeReview 字段，把结论固化为可追溯记录。\n\n## 现状\n\n- 24 个会话样本中 2 个达阈值：两个长会话样本：估算活跃分别约 936.2 分钟和 86.2 分钟（均为子 Agent 候选）\n- outcomeReview.status=required、reviewedActiveLongCount=0\n- 项目最近 4 个提交连续修复层 3 漏发、PAUSE 终态产能虚增、SQLite :memory: 与重置时机等问题\n\n## 怎么算完成\n\n1. 运行私有 review packet（不动业务代码）：\n   ```bash\n   node \"<better-harness>/scripts/session-analysis.mjs\" insights --platform qoder --workspace \"<workspace>\" --selection all-eligible --limit 1000 --format json --output <run>/insights.json\n   node \"<better-harness>/scripts/session-analysis/usage-review-packet.mjs\" --source <run>/insights.json --workspace \"<workspace>\" --limit 8 --output <run>/.review-packet.json\n   ```\n2. 对每个长会话样本各写一条 taskFamily、outcome、friction、confidence、evidenceReason，写入 `<run>/.review.json`。\n3. 运行 `node \"<better-harness>/scripts/session-analysis/usage-semantic-review.mjs\" --source <run>/insights.json --packet <run>/.review-packet.json --review <run>/.review.json --output <run>/insights.reviewed.json`。\n4. 运行 `node \"<better-harness>/scripts/session-analysis/validate-usage-report.mjs\" --source <run>/insights.reviewed.json --report <run>/report.md`，必须返回 `ok: true`。\n5. 若复核未确认问题，不创建任何 Memory、Skill 或 Hook；只在 `<run>/report.md` 保留匿名别名。\n\n## 验证\n\n- `<run>/insights.reviewed.json` 的 outcomeReview.reviewedActiveLongCount 等于已复核的展示别名数（2 个样本）\n- `<run>/report.md` 校验通过\n- 通过后删除 `<run>/.review.json` 与 `<run>/.review-packet.json` 私有临时文件\n\n## 范围\n\n只生成隐私安全的会话效率复核与 reader report，不改业务代码，不把墙钟跨度当作活跃成本，持久报告只保留匿名别名。",
+      "expectedArtifact": "Document",
+      "expectedOutput": [
+        "两个长会话样本各完成任务族/结果/摩擦分类，并形成 reviewed source 校验通过的报告。"
+      ],
+      "kind": "outcome-gap"
+    },
+    {
+      "id": "user-skill-name-mismatch-and-no-progressive-disclosure",
+      "title": "用户全局 Skill <user-skill> 命名不匹配且 142 行未做渐进式披露",
+      "severity": "Low",
+      "reason": "agent-lint envelope 给出 2 条针对同一资产的 advisory：\n1. skill-name-mismatch：`<user-home>/.qoder/skills/<user-skill>/SKILL.md` 在 frontmatter 中声明 name 为 `<skill-name-a>`，但文件夹对外暴露的是 `<user-skill>`，会导致 Skill 注册名与目录不一致，调用方按其中一种名称查找可能失败。\n2. skill-long-without-progressive-references：该 SKILL.md 共 142 行但没有任何本地 Markdown 引用，违反 Agent Skills 规范的「Progressive Disclosure」原则，全部内容一次性注入上下文会显著增加 token 占用。\n本工作区未声明使用该 Skill 的 task 路由，但它是用户全局 Skill，未来一旦被触发即会出现名称路由失败或上下文膨胀。",
+      "dimensionRefs": [
+        "learning-capture"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n修复用户全局 Skill <user-skill> 的命名一致性，并按 Progressive Disclosure 原则拆分内容。\n\n## 现状\n\n- `<user-home>/.qoder/skills/<user-skill>/SKILL.md` 142 行\n- frontmatter `name` 声明为 `<skill-name-a>`，与目录名 `<user-skill>` 不一致\n- 文件无任何本地 Markdown 引用，未做 Progressive Disclosure\n\n## 怎么算完成\n\n1. 选择一种权威命名并对齐：\n   - 选项 A：把 SKILL.md frontmatter `name` 改为 `<user-skill>`（保留目录）\n   - 选项 B：把目录 `<user-skill>` 改名为 `<skill-name-a>`（保留 frontmatter）\n   选 A 风险更低（避免破坏已有别名/调用）。\n2. 把 142 行内容拆为：\n   - SKILL.md：核心触发条件、参数、最小可执行示例（建议 ≤ 50 行）\n   - references/security-patterns.md：详细安全模式说明\n   - references/virus-total-api.md：VirusTotal API 调用细节\n3. 在 SKILL.md 用 `See references/...` 链接指向拆分出去的章节。\n4. 不删除 Skill，不改其它用户全局资产。\n\n## 验证\n\n- `agent-lint` 对该资产的 skill-name-mismatch 与 skill-long-without-progressive-references 两条 advisory 应消失\n- 加载 Skill 后，触发路径仍命中同一调用名（`/<user-skill>`）\n\n## 范围\n\n只编辑 `<user-home>/.qoder/skills/<user-skill>/` 目录下的 SKILL.md 与新建 references/*.md；不动项目仓库，不创建项目级 Skill。",
+      "expectedArtifact": "Skill",
+      "expectedOutput": [
+        "Skill 名称与目录一致，主 SKILL.md ≤ 50 行，详细内容下沉到 references/，lint 两条 advisory 清零。"
+      ],
+      "kind": "evidence-gap"
+    },
+    {
+      "id": "plugin-family-name-overlap",
+      "title": "两个 Qoder 插件家族名称相似度 70%，安装清单存在歧义",
+      "severity": "Low",
+      "reason": "asset-integrity envelope 给出 advisory `plugin-name-family-overlap`：<plugin-a>@qoder-bundler（<ver-a>） 与 <plugin-b>@qoder-bundler（<ver-b>） 名称相似度 70%，平台在 `<user-home>/.qoder/plugins/cache/qoder-bundler/` 同时缓存两者。bumbo_stats 当前由 <plugin-a> 提供服务（本次 `/<plugin-a>` 调用即由其提供），同时用户也安装了 <plugin-b>。两个插件共用 `harness` 命令族但版本不同、能力边界不同（<plugin-a> 走 evidence-bundle/analyze/render 流程，<plugin-b> 走 task-loop 流程），存在替换、重命名或并存测试变体三种可能；当前证据无法区分。若后续任一插件升级或停用，命令路由将出现隐性断裂。",
+      "dimensionRefs": [
+        "task-understanding"
+      ],
+      "aiFixPrompt": "/better-harness fix this issue\n\n澄清 两个 Qoder Plugin（<plugin-a> 与 <plugin-b>） 的关系，把意图（替换 / 重命名 / 并存）固化为可识别证据。\n\n## 现状\n\n- 两个 Plugin 均在 `<user-home>/.qoder/plugins/cache/qoder-bundler/` 下：\n  - <plugin-a>@qoder-bundler <ver-a>\n  - <plugin-b>@qoder-bundler <ver-b>\n- 名称相似度 70%，asset-integrity 已记 advisory plugin-name-family-overlap\n- 当前 `/<plugin-a>` 调用由 <plugin-a> 提供\n\n## 怎么算完成\n\n1. 读两个插件的 `<user-home>/.qoder/plugins/cache/qoder-bundler/<plugin-id>/.qoder-plugin/plugin.json` 与 `<user-home>/.qoder/plugins/cache/qoder-bundler/<plugin-id>/.qoder-plugin/plugin.json`，比对 description、commands 与版本发布日期。\n2. 根据实际差异产出三选一的处置：\n   - 若 <plugin-a> 是 <plugin-b> 的替代：保留新版，禁用旧版（修改 `<user-home>/.qoder/plugins/installed.json` 或对应启用表）\n   - 若为重命名遗留：删除 <plugin-b> 缓存目录，禁用插件\n   - 若需并存：在两份 plugin.json 中各自写明职责边界（哪一类命令归哪个 Plugin），并在 README 中交叉引用\n3. 处理完成后，再次运行 `better-harness agent-customize` 或 `coding-agent-practices asset-integrity`，确认 plugin-name-family-overlap advisory 消失或归类为 intentional variant。\n4. 不修改项目仓库文件，不动业务代码。\n\n## 验证\n\n- `installed.json` 中两个插件的启用状态反映最终意图\n- 重跑 `better-harness commands --json` 应只剩目标 Plugin 的命令族\n\n## 范围\n\n只动 `<user-home>/.qoder/plugins/cache/qoder-bundler/` 下的 plugin.json/installed.json；不动项目仓库。",
+      "expectedArtifact": "Config",
+      "expectedOutput": [
+        "两个插件 的关系明确为「替换 / 重命名 / 并存」之一，且能在 <installed.json> 中识别。"
+      ],
+      "kind": "evidence-gap"
+    }
+  ]
+}

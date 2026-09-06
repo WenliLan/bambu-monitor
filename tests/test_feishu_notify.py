@@ -17,17 +17,23 @@
   TC-FEISHU-14: 队列满时优雅丢弃
   TC-FEISHU-15: _PrinterNotifState.reset_if_new_job
   TC-FEISHU-16: 消息构建测试
+  TC-FEISHU-17: _on_message_received 解析群聊 @机器人消息并入队
+  TC-FEISHU-18: _on_message_received 拒绝非群聊/未@机器人消息
+  TC-FEISHU-19: _on_message_received 冷却机制（同一指令 3s 内重复被忽略）
+  TC-FEISHU-20: _cmd_threshold 修改阈值并触发 on_threshold_changed 持久化
+  TC-FEISHU-21: _process_command 派发器路由五个指令
 """
 
 import pytest
 import asyncio
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 
 from bumbo_stats.models import PrinterState, PrinterStatus, HMSError
 from bumbo_stats.printer.feishu import (
     FeishuNotifier, FeishuConfig, _PrinterNotifState,
-    EVENT_LAYER3, EVENT_COMPLETED, EVENT_ERROR,
+    EVENT_LAYER3, EVENT_PROGRESS50, EVENT_COMPLETED, EVENT_ERROR, EVENT_AI_ALARM,
 )
 
 
@@ -53,6 +59,7 @@ def _make_feishu_config():
         app_secret="fake_secret",
         chatid="fake_chatid",
         layer3=True,
+        progress50=True,
         completed=True,
         error=True,
     )
@@ -303,41 +310,417 @@ class TestFeishuNotifier:
         state = _PrinterNotifState()
         state.last_gcode = "job1.gcode"
         state.layer3_sent = True
+        state.progress50_sent = True
         state.completed_sent = True
 
         # 同任务不变
         state.reset_if_new_job("job1.gcode")
         assert state.layer3_sent is True
+        assert state.progress50_sent is True
         assert state.completed_sent is True
 
         # 新任务重置
         state.reset_if_new_job("job2.gcode")
         assert state.layer3_sent is False
+        assert state.progress50_sent is False
         assert state.completed_sent is False
         assert state.last_gcode == "job2.gcode"
 
+    def test_tc_feishu_15b_same_job_filename_normalized(self):
+        """TC-FEISHU-15b: 同一任务的 gcode 在不同阶段形式不同（带/不带扩展名），
+        归一化比较后应识别为同一任务，不重置已发送标记。
+
+        背景：MQTT 上报带 ``.3mf``（本地文件名），云端同步后可能为任务名
+        （无扩展名）。若 reset_if_new_job 不归一化，形式变化就会被误判
+        为新任务，导致 layer3/progress50/completed 在同一任务内多次重发。
+        """
+        from bumbo_stats.printer.wecom import normalize_gcode
+
+        # 场景1: 先收到带扩展名的 gcode，并已发送 layer3
+        state = _PrinterNotifState()
+        state.last_gcode = "CUBE_2.4 i-type narrow.3mf"
+        state.layer3_sent = True
+        state.progress50_sent = True
+        state.completed_sent = False
+
+        # MQTT 上报形式变化（无扩展名），归一化后相等 → 不应重置
+        state.reset_if_new_job("CUBE_2.4 i-type narrow")
+        assert state.layer3_sent is True, \
+            "同任务（归一化后相等）不应重置 layer3_sent，否则会重发通知"
+        assert state.progress50_sent is True
+        # last_gcode 同步为最新形式
+        assert state.last_gcode == "CUBE_2.4 i-type narrow"
+
+        # 场景2: 反向也一样（先无扩展名，后带扩展名）
+        state2 = _PrinterNotifState()
+        state2.last_gcode = "job-name"
+        state2.layer3_sent = True
+        state2.reset_if_new_job("job-name.3mf")
+        assert state2.layer3_sent is True
+        assert state2.last_gcode == "job-name.3mf"
+
+        # 场景3: 真正的新任务（归一化后不等）应重置
+        state3 = _PrinterNotifState()
+        state3.last_gcode = "task_a.3mf"
+        state3.layer3_sent = True
+        state3.reset_if_new_job("task_b.gcode")
+        assert state3.layer3_sent is False
+        assert state3.last_gcode == "task_b.gcode"
+
+        # 场景4: 空 gcode 不应触发重置（保护初始状态）
+        state4 = _PrinterNotifState()
+        state4.last_gcode = ""
+        state4.layer3_sent = True
+        state4.reset_if_new_job("")
+        assert state4.layer3_sent is True
+
+        # 场景5: 中英混合扩展名都该归一化（确认 normalize_gcode 行为）
+        assert normalize_gcode("xxx.3mf") == normalize_gcode("xxx")
+        assert normalize_gcode("xxx.GCODE") == normalize_gcode("xxx.gcode")
+
     def test_tc_feishu_16_message_build(self, mock_camera):
-        """TC-FEISHU-16: 消息构建测试"""
+        """TC-FEISHU-16: 消息构建测试
+
+        飞书 post 富文本不渲染 Markdown，模板须满足:
+          1. 第一行含机器名称 + 信息关键内容
+          2. 不能出现 ``**xxx**`` 加粗标记（飞书会原样显示星号）
+          3. HMS 错误保留中文名 + 原始消息
+        """
         from bumbo_stats.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
         notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
 
-        # layer3 消息
+        # ---- layer3 消息 ----
         status = _make_status("S001", gcode_file="test.gcode", current_layer=3, total_layers=100, progress=3)
         msg = notifier._build_message("TestPrinter", EVENT_LAYER3, status)
         assert "第 3 层" in msg
         assert "TestPrinter" in msg
         assert "test.gcode" in msg
+        # 模板断言: 首行 = 机器名 + 事件关键内容
+        first_line = msg.split("\n", 1)[0]
+        assert "TestPrinter" in first_line
+        assert "第 3 层" in first_line
+        # 模板断言: 正文不出现 Markdown 加粗标记
+        assert "**" not in msg
 
-        # completed 消息
+        # ---- completed 消息 ----
         status = _make_status("S001", gcode_file="test.gcode", current_layer=100, total_layers=100, progress=100)
         msg = notifier._build_message("TestPrinter", EVENT_COMPLETED, status)
         assert "完成" in msg
+        assert "**" not in msg
+        assert "TestPrinter" in msg.split("\n", 1)[0]
 
-        # error 消息
+        # ---- error 消息 ----
         errors = [HMSError(code=0x0B01, severity="error", message="堵嘴检测")]
         msg = notifier._build_message("TestPrinter", EVENT_ERROR, None, errors)
         assert "异常" in msg
         assert "堵嘴检测" in msg
+        assert "**" not in msg
+        assert "TestPrinter" in msg.split("\n", 1)[0]
+
+        # ---- AI 报警消息（为防回归） ----
+        ai_alert = MagicMock()
+        ai_alert.probability = 0.85
+        ai_alert.message = "连续 3 帧检测到异常"
+        status = _make_status("S001", gcode_file="test.gcode", current_layer=50, total_layers=100, progress=50)
+        msg = notifier._build_message("TestPrinter", EVENT_AI_ALARM, status, ai_alert=ai_alert)
+        first_line = msg.split("\n", 1)[0]
+        assert "TestPrinter" in first_line
+        assert "AI" in first_line
+        # 概率以 1 位百分数呈现
+        assert "85.0%" in first_line or "85%" in first_line
+        assert "**" not in msg
+
+        # ---- progress50 消息 ----
+        status = _make_status("S001", gcode_file="test.gcode", current_layer=50, total_layers=100, progress=50)
+        msg = notifier._build_message("TestPrinter", EVENT_PROGRESS50, status)
+        first_line = msg.split("\n", 1)[0]
+        # 首行 = 机器名 + 事件关键内容
+        assert "TestPrinter" in first_line
+        assert "半数" in first_line or "过半" in first_line
+        # 补充信息: 进度 50% (层 50/100)
+        assert "50%" in msg
+        assert "50/100" in msg
+        # 不能出现 Markdown 加粗
+        assert "**" not in msg
+
+    def test_tc_feishu_17_progress50_event_queued(self, mock_camera):
+        """TC-FEISHU-17: progress50 事件入队"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        notifier._queue = asyncio.Queue(maxsize=10)
+
+        status = _make_status("S001", current_layer=50, total_layers=100, progress=50)
+        notifier.notify("S001", EVENT_PROGRESS50, status)
+
+        assert notifier._queue.qsize() == 1
+        # 状态标记应被设为 True
+        assert notifier._states["S001"].progress50_sent is True
+
+    def test_tc_feishu_18_progress50_deduplicated(self, mock_camera):
+        """TC-FEISHU-18: 同一 progress50 事件去重"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        notifier._queue = asyncio.Queue(maxsize=10)
+
+        status = _make_status("S001", current_layer=50, total_layers=100, progress=50)
+
+        notifier.notify("S001", EVENT_PROGRESS50, status)
+        assert notifier._queue.qsize() == 1
+
+        notifier.notify("S001", EVENT_PROGRESS50, status)
+        assert notifier._queue.qsize() == 1  # 未增加
+
+    def test_tc_feishu_19_progress50_disabled_no_queue(self, mock_camera):
+        """TC-FEISHU-19: 禁用 progress50 时不入队"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        config.progress50 = False  # 禁用 progress50
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        notifier._queue = asyncio.Queue(maxsize=10)
+
+        status = _make_status("S001", current_layer=50, total_layers=100, progress=50)
+        notifier.notify("S001", EVENT_PROGRESS50, status)
+
+        assert notifier._queue.qsize() == 0
+        # 状态标记不应被设置（未入队）
+        assert notifier._states["S001"].progress50_sent is False
+
+
+# ---------------------------------------------------------------------------
+# 辅助函数：构造 mock 的 lark-oapi 群聊事件对象
+# ---------------------------------------------------------------------------
+
+def _make_mention(key: str):
+    """构造 mentions 中的一个 mention 对象"""
+    m = MagicMock()
+    m.key = key
+    return m
+
+
+def _make_lark_event(text: str, *, chat_type: str = "group",
+                     message_type: str = "text",
+                     mentioned_keys: list = None,
+                     sender_type: str = "user"):
+    """构造一个 mock 的 P2ImMessageReceiveV1 事件对象
+
+    模拟飞书 SDK 反序列化后的 event/ev 结构：
+      ev.event.sender.sender_type = "user"|"app"
+      ev.event.message.chat_type / message_type / content / mentions / chat_id / message_id
+    """
+    import json as _json
+    ev = MagicMock()
+    sender = MagicMock()
+    sender.sender_type = sender_type
+    ev.sender = sender
+
+    msg = MagicMock()
+    msg.chat_type = chat_type
+    msg.message_type = message_type
+    msg.content = _json.dumps({"text": text})
+    msg.mentions = [_make_mention(k) for k in (mentioned_keys or [])]
+    msg.chat_id = "oc_fake_chat"
+    msg.message_id = "om_fake_msg"
+
+    event = MagicMock()
+    event.sender = sender
+    event.message = msg
+    ev.event = event
+    return ev
+
+
+# ---------------------------------------------------------------------------
+# TC-FEISHU-17~21: 飞书群聊指令路径测试
+# ---------------------------------------------------------------------------
+
+class TestFeishuCommands:
+    """飞书入站消息 + 指令处理路径"""
+
+    def test_tc_feishu_17_parsed_and_queued(self, mock_camera):
+        """TC-FEISHU-17: 群聊 @机器人 发“截图”时解析并入队 snapshot 指令"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        notifier._queue = asyncio.Queue(maxsize=10)
+
+        # 群里 @机器人 发“截图”
+        ev = _make_lark_event("@_user_1 截图", mentioned_keys=["@_user_1"])
+        notifier._on_message_received(ev)
+
+        assert notifier._queue.qsize() == 1
+        item = notifier._queue.get_nowait()
+        assert item["event"] == "snapshot"
+        assert item["raw_text"] == "截图"  # @机器人 部分已被剥离
+        assert item["chat_id"] == "oc_fake_chat"
+        assert item["message_id"] == "om_fake_msg"
+
+    def test_tc_feishu_18_rejects_non_group_or_no_mention(self, mock_camera):
+        """TC-FEISHU-18: 非群聊 / 未 @机器人 的消息被忽略"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        notifier._queue = asyncio.Queue(maxsize=10)
+
+        # 私聊消息（chat_type=p2p）被忽略
+        ev_p2p = _make_lark_event("截图", chat_type="p2p",
+                                  mentioned_keys=["@_user_1"])
+        notifier._on_message_received(ev_p2p)
+        assert notifier._queue.qsize() == 0
+
+        # 群聊但没 @机器人 被忽略
+        ev_no_at = _make_lark_event("有人说了截图", chat_type="group",
+                                    mentioned_keys=[])
+        notifier._on_message_received(ev_no_at)
+        assert notifier._queue.qsize() == 0
+
+        # 群聊但不含指令关键词被忽略
+        ev_no_kw = _make_lark_event("@_user_1 你好", chat_type="group",
+                                    mentioned_keys=["@_user_1"])
+        notifier._on_message_received(ev_no_kw)
+        assert notifier._queue.qsize() == 0
+
+    def test_tc_feishu_19_cooldown_blocks_duplicate(self, mock_camera):
+        """TC-FEISHU-19: 同一指令在冷却窗口内重复触发被丢弃"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        notifier._queue = asyncio.Queue(maxsize=10)
+
+        ev = _make_lark_event("@_user_1 帮助", mentioned_keys=["@_user_1"])
+
+        notifier._on_message_received(ev)
+        assert notifier._queue.qsize() == 1  # 第一次入队
+
+        # 冷却时间内再次发同一指令 → 被丢弃
+        notifier._on_message_received(ev)
+        assert notifier._queue.qsize() == 1  # 未增加
+
+    async def test_tc_feishu_20_cmd_threshold_persists(self, mock_camera):
+        """TC-FEISHU-20: _cmd_threshold 修改阈值并触发 on_threshold_changed 回调（持久化）
+
+        验证：
+          1. 调用 ai_guard.set_threshold 被实际触发
+          2. set_threshold 内部回调 on_threshold_changed 被调用，传入新阈值
+          3. 返回文本包含“已更新”和新阈值
+        """
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+
+        # 模拟 AIGuardLoop：set_threshold 返回旧值 + 同步回调 on_threshold_changed
+        persist_calls: list[float] = []
+
+        class _FakeGuard:
+            threshold = 0.5
+
+            def set_threshold(self, v: float) -> float:
+                # 模拟 AIGuardLoop.set_threshold 的实际行为:
+                # 修改 threshold + 调用 on_threshold_changed
+                old = self.threshold
+                clamped = max(0.0, min(1.0, float(v)))
+                self.threshold = clamped
+                self.on_threshold_changed(clamped)
+                return old
+
+            def on_threshold_changed(self, v: float) -> None:
+                persist_calls.append(v)
+
+        guard = _FakeGuard()
+        notifier.bind_ai_guard(guard)
+
+        # 注入 token，跳过 _refresh_token
+        notifier._tenant_token = "fake_token"
+        notifier._token_expires_at = time.time() + 3600
+
+        # Mock _send_message 只记录 title + content，不真发
+        sent: list[dict] = []
+        async def _fake_send(content, frames, title=""):
+            sent.append({"content": content, "title": title})
+            return "om_mock"
+        notifier._send_message = _fake_send  # type: ignore[assignment]
+
+        await notifier._cmd_threshold("oc_fake_chat", 0.7)
+
+        assert guard.threshold == 0.7
+        assert persist_calls == [0.7]
+        assert len(sent) == 1
+        assert "已更新" in sent[0]["content"]
+        assert "0.70" in sent[0]["content"]
+
+    async def test_tc_feishu_21_dispatcher_routes(self, mock_camera):
+        """TC-FEISHU-21: _process_command 派发器路由五个指令到对应 _cmd_* 方法"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        notifier._tenant_token = "fake_token"
+        notifier._token_expires_at = time.time() + 3600
+
+        # Mock 五个 _cmd_* 方法以验证派发路径
+        called = {"snapshot": 0, "status": 0, "overview": 0,
+                  "threshold": 0, "help": 0}
+
+        async def _stub(*a, **k):
+            return None
+        async def _snapshot(chat_id):
+            called["snapshot"] += 1
+        async def _status(chat_id):
+            called["status"] += 1
+        async def _overview(chat_id):
+            called["overview"] += 1
+        async def _threshold(chat_id, v):
+            called["threshold"] += 1
+        async def _help(chat_id):
+            called["help"] += 1
+        notifier._cmd_snapshot = _snapshot  # type: ignore[assignment]
+        notifier._cmd_status = _status  # type: ignore[assignment]
+        notifier._cmd_overview = _overview  # type: ignore[assignment]
+        notifier._cmd_threshold = _threshold  # type: ignore[assignment]
+        notifier._cmd_help = _help  # type: ignore[assignment]
+
+        for cmd in ("snapshot", "status", "overview", "help"):
+            await notifier._process_command({"event": cmd, "chat_id": "oc_x"})
+        await notifier._process_command({"event": "threshold", "chat_id": "oc_x",
+                                          "numeric_value": 0.6})
+
+        assert called == {"snapshot": 1, "status": 1, "overview": 1,
+                          "threshold": 1, "help": 1}
+
+    async def test_tc_feishu_22_unbound_ai_guard(self, mock_camera):
+        """TC-FEISHU-22: 未绑定 ai_guard 时阈值指令返回友好提示，不崩"""
+        from bumbo_stats.config import PrinterConfig
+
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        config = _make_feishu_config()
+        notifier = FeishuNotifier(config, [printer_cfg], mock_camera)
+        # 不调用 bind_ai_guard
+        notifier._tenant_token = "fake_token"
+        notifier._token_expires_at = time.time() + 3600
+
+        sent: list[dict] = []
+        async def _fake_send(content, frames, title=""):
+            sent.append({"content": content, "title": title})
+            return "om_mock"
+        notifier._send_message = _fake_send  # type: ignore[assignment]
+
+        await notifier._cmd_threshold("oc_x", 0.8)
+        assert any("未启动" in s["content"] for s in sent)

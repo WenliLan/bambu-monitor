@@ -60,6 +60,11 @@ class Database:
                     FOREIGN KEY (printer_serial) REFERENCES printers(serial)
                 );
 
+                CREATE TABLE IF NOT EXISTS meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_sessions_serial
                     ON print_sessions(printer_serial);
                 CREATE INDEX IF NOT EXISTS idx_sessions_start
@@ -86,8 +91,44 @@ class Database:
             """, (serial, name, ip, model, location))
             await db.commit()
 
-    async def record_print_start(self, serial: str, gcode_file: str):
-        """记录打印任务开始，先结束该打印机所有已有的 running 任务"""
+    async def update_heartbeat(self):
+        """更新服务心跳时间（最后存活时刻）
+
+        服务运行期间定期调用。重启后结算停机期间遗留的孤儿 session 时，
+        用心跳时间作为结算时刻封顶，避免把整个停机期误算为打印时长。
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO meta (key, value) VALUES ('last_active', ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (datetime.now().isoformat(),),
+            )
+            await db.commit()
+
+    async def get_last_heartbeat(self) -> datetime | None:
+        """读取上次运行的心跳时间（服务最后存活时刻），无记录返回 None"""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT value FROM meta WHERE key='last_active'"
+            ) as cursor:
+                row = await cursor.fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            return datetime.fromisoformat(row[0])
+        except ValueError:
+            return None
+
+    async def record_print_start(self, serial: str, gcode_file: str,
+                                 settle_time: datetime | None = None):
+        """记录打印任务开始，先结束该打印机所有已有的 running 任务
+
+        Args:
+            settle_time: 启动补录场景传入的心跳时刻。存在遗留 running 任务时，
+                旧任务结算到该时刻、新任务也从该时刻起算（停机期视为持续打印，
+                总时长不丢）；没有遗留任务时仍用当前时间（停机期开始的任务
+                真实开始时刻未知，不臆造）。
+        """
         now = datetime.now()
         async with aiosqlite.connect(self.db_path) as db:
             # 结束该打印机所有已有的 running 任务（防止状态闪烁产生重复记录）
@@ -97,31 +138,43 @@ class Database:
             """, (serial,)) as cursor:
                 old_sessions = await cursor.fetchall()
 
+            # 有遗留任务且提供了心跳时刻：旧任务结算到心跳、新任务从心跳起算
+            ref_time = settle_time if (old_sessions and settle_time) else now
+            if settle_time and ref_time != now:
+                logger.info("启动补录结算 %s: 使用心跳时刻 %s", serial, ref_time.isoformat())
+
             for row in old_sessions:
                 old_id, old_start_str = row
                 old_start = datetime.fromisoformat(old_start_str)
-                duration = int((now - old_start).total_seconds())
+                # 心跳时刻早于旧任务开始时（异常数据）封顶为 0 时长
+                effective_ref = max(ref_time, old_start)
+                duration = int((effective_ref - old_start).total_seconds())
                 await db.execute("""
                     UPDATE print_sessions
                     SET end_time=?, duration_seconds=?, status='completed'
                     WHERE id=?
-                """, (now.isoformat(), duration, old_id))
+                """, (effective_ref.isoformat(), duration, old_id))
 
             # 创建新的 running 任务
             await db.execute("""
                 INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
                 VALUES (?, ?, ?, 'running')
-            """, (serial, gcode_file, now.isoformat()))
+            """, (serial, gcode_file, ref_time.isoformat()))
             await db.commit()
         logger.info("记录打印开始: %s - %s", serial, gcode_file)
 
-    async def record_print_end(self, serial: str, status: str):
+    async def record_print_end(self, serial: str, status: str,
+                               end_time: datetime | None = None):
         """记录打印任务结束，计算时长并更新 print_sessions
 
         注意：不写 daily_usage。今日产能由 get_today_usage_all 从 sessions 实时计算，
         历史数据由 snapshot_past_day 在每天午夜后一次性快照固化。
+
+        Args:
+            end_time: 显式结算时刻（启动时用上次心跳封顶，避免停机期被算成打印时长）；
+                默认当前时间。
         """
-        now = datetime.now()
+        now = end_time if end_time is not None else datetime.now()
 
         async with aiosqlite.connect(self.db_path) as db:
             # 查找该打印机最近的 running 任务
@@ -135,13 +188,15 @@ class Database:
             if row:
                 session_id, start_time_str = row
                 start_time = datetime.fromisoformat(start_time_str)
-                duration = int((now - start_time).total_seconds())
+                # 结算时刻早于开始时刻（异常数据）时封顶为 0 时长
+                effective_end = max(now, start_time)
+                duration = int((effective_end - start_time).total_seconds())
 
                 await db.execute("""
                     UPDATE print_sessions
                     SET end_time=?, duration_seconds=?, status=?
                     WHERE id=?
-                """, (now.isoformat(), duration, status, session_id))
+                """, (effective_end.isoformat(), duration, status, session_id))
                 await db.commit()
                 logger.info("记录打印结束: %s 时长=%ds 状态=%s", serial, duration, status)
 

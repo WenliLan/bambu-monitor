@@ -51,6 +51,14 @@ def _do_login(args):
         sys.exit(1)
 
 
+# 强制 stdout/stderr 为 UTF-8，避免 Windows GBK 终端写入 emoji 时抛 UnicodeEncodeError
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except (AttributeError, OSError):
+        pass
+
+
 def _do_serve(args):
     """执行服务启动"""
     from .config import load_config

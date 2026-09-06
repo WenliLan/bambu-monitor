@@ -27,6 +27,10 @@ NOTIFY_PROGRESS = 50
 # 触发完成通知的进度阈值（99% 时打印头尚未归位，截图能拍到成品）
 NOTIFY_COMPLETE_PROGRESS = 99
 
+# 心跳写入间隔（秒）：记录服务最后存活时刻，重启后结算停机期遗留的
+# 孤儿 session 时用它封顶，避免把整个停机期误算为打印时长
+HEARTBEAT_INTERVAL = 60.0
+
 
 class PrintMonitor:
     """后台打印状态监控器（事件驱动 + 定期广播）"""
@@ -37,11 +41,13 @@ class PrintMonitor:
         db: Database,
         broadcast: BroadcastFn,
         wecom_notifier=None,
+        feishu_notifier=None,
     ):
         self.manager = manager
         self.db = db
         self.broadcast = broadcast
-        self.wecom_notifier = wecom_notifier  # 可选：企业微信通知器
+        self.wecom_notifier = wecom_notifier       # 可选：企业微信通知器
+        self.feishu_notifier = feishu_notifier      # 可选：飞书通知器
         self._last_states: dict[str, PrinterState] = {}
         self._last_gcode: dict[str, str] = {}       # 上次处理时的 gcode（用于检测变化）
         # 最后一次确定状态（跳过 UNKNOWN/OFFLINE，用于区分断线重连和真正的新任务）
@@ -54,6 +60,9 @@ class PrintMonitor:
         self._progress50_notified: dict[str, bool] = {}
         # 追踪每台打印机已触发的完成通知（防止 99% 后每条消息重复入队/刷日志）
         self._completed_notified: dict[str, bool] = {}
+        # 记录每次进入 PAUSE 时的层数，用于区分"中途暂停"(layer>0) 和
+        # "切片已上传、等待开始"(layer=0)：后者在 PAUSE->RUNNING 时其实是一个新任务
+        self._pause_layer: dict[str, int] = {}
         self._running = False
         self._last_snapshot_date: date | None = date.today()
 
@@ -77,10 +86,24 @@ class PrintMonitor:
         await self._scan_startup_notifications()
 
         logger.info("后台监控启动，批量广播间隔: %ss", broadcast_interval)
+        # 立即写一次心跳，随后每 HEARTBEAT_INTERVAL 秒更新
+        try:
+            await self.db.update_heartbeat()
+        except Exception as e:
+            logger.warning("心跳写入失败: %s", e)
+        last_heartbeat = asyncio.get_event_loop().time()
         while self._running:
             try:
                 await asyncio.sleep(broadcast_interval)
                 await self._broadcast_all()
+                # 定期心跳：记录服务最后存活时刻
+                loop_now = asyncio.get_event_loop().time()
+                if loop_now - last_heartbeat >= HEARTBEAT_INTERVAL:
+                    last_heartbeat = loop_now
+                    try:
+                        await self.db.update_heartbeat()
+                    except Exception as e:
+                        logger.warning("心跳写入失败: %s", e)
                 # 每日快照：仅在日期变更（午夜后）时触发，已存在则跳过
                 today = date.today()
                 if self._last_snapshot_date != today:
@@ -99,6 +122,11 @@ class PrintMonitor:
         不发送任何通知（历史事件不补发）。
         """
         logger.info("[启动扫描] 开始扫描 %d 台打印机...", len(self.manager.get_all_statuses()))
+        # 上次运行的最后存活时刻：停机期间结束的任务无法知道真实结束时刻，
+        # 用心跳时刻结算封顶（误差 ≤ 心跳间隔），不能把整个停机期算成打印时长
+        heartbeat = await self.db.get_last_heartbeat()
+        if heartbeat is not None:
+            logger.info("[启动扫描] 使用上次心跳时刻结算孤儿任务: %s", heartbeat.isoformat())
         statuses = self.manager.get_all_statuses()
         for serial, status in statuses.items():
             # 非运行态：结算残留的孤儿 running session（服务停机期间
@@ -111,7 +139,7 @@ class PrintMonitor:
                         "failed" if status.state == PrinterState.FAILED
                         else "completed"
                     )
-                    await self.db.record_print_end(serial, end_status)
+                    await self.db.record_print_end(serial, end_status, end_time=heartbeat)
                 continue
 
             gcode = status.gcode_file or ""
@@ -124,12 +152,17 @@ class PrintMonitor:
             self._layer3_notified[serial] = True
             self._progress50_notified[serial] = True
             self._completed_notified[serial] = True
-            # 同步更新 WeComNotifier 的状态，防止 gcode 变化误判
+            # 同步更新通知模块的状态，防止 gcode 变化误判
             if self.wecom_notifier and serial in self.wecom_notifier._states:
                 self.wecom_notifier._states[serial].last_gcode = gcode
                 self.wecom_notifier._states[serial].layer3_sent = True
                 self.wecom_notifier._states[serial].progress50_sent = True
                 self.wecom_notifier._states[serial].completed_sent = True
+            if self.feishu_notifier and serial in self.feishu_notifier._states:
+                self.feishu_notifier._states[serial].last_gcode = gcode
+                self.feishu_notifier._states[serial].layer3_sent = True
+                self.feishu_notifier._states[serial].progress50_sent = True
+                self.feishu_notifier._states[serial].completed_sent = True
             logger.info(
                 "[启动扫描] 初始化 %s: layer=%d/%d progress=%d%% gcode=%s (运行中任务不补发通知)",
                 serial, status.current_layer, status.total_layers,
@@ -176,7 +209,7 @@ class PrintMonitor:
             serial: 打印机序列号
             status: 最新状态
         """
-        if not self.wecom_notifier:
+        if not self.wecom_notifier and not self.feishu_notifier:
             return
 
         # HMS 错误检测（任何状态都可能发生，与 RUNNING 独立）
@@ -190,7 +223,7 @@ class PrintMonitor:
                     [(e.code, e.message) for e in error_events],
                     gcode,
                 )
-                self.wecom_notifier.notify(serial, "error", status, error_events)
+                self._notify_all(serial, "error", status, errors=error_events)
 
         if status.state != PrinterState.RUNNING:
             return
@@ -220,7 +253,7 @@ class PrintMonitor:
                 "触发第3层通知: %s layer=%d/%d file=%s",
                 serial, status.current_layer, status.total_layers, gcode,
             )
-            self.wecom_notifier.notify(serial, "layer3", status)
+            self._notify_all(serial, "layer3", status)
 
         # 事件2：进度过半（>=50%，未到完成阈值时触发一次）
         if (
@@ -232,7 +265,7 @@ class PrintMonitor:
                 "触发50%%进度通知: %s progress=%d layer=%d/%d file=%s",
                 serial, status.progress, status.current_layer, status.total_layers, gcode,
             )
-            self.wecom_notifier.notify(serial, "progress50", status)
+            self._notify_all(serial, "progress50", status)
 
         # 事件3：进度达到完成阈值（99%，此时截图能拍到成品；标记防止
         # 进度停在 99% 期间每条消息重复入队/刷日志）
@@ -247,7 +280,7 @@ class PrintMonitor:
                 "触发完成通知(>=99%%): %s progress=%d file=%s",
                 serial, status.progress, gcode,
             )
-            self.wecom_notifier.notify(serial, "completed", status)
+            self._notify_all(serial, "completed", status)
 
     async def _handle_state_change(self, serial: str, status: PrinterStatus):
         """处理状态变更事件（打印开始/结束检测）"""
@@ -288,11 +321,25 @@ class PrintMonitor:
             curr_state.value,
         )
 
-        # 检测打印开始（排除 PAUSE 恢复，避免分割同一打印任务）
-        if curr_state == PrinterState.RUNNING and prev_state not in (
-            PrinterState.RUNNING, PrinterState.PAUSE,
-        ):
-            await self.db.record_print_start(serial, status.gcode_file)
+        # 检测打印开始
+        # - RUNNING <- 非 RUNNING/PAUSE：肯定新任务
+        # - RUNNING <- PAUSE：可能是新任务(切片后 layer=0 PAUSE 等点开始)或中途暂停恢复
+        #   区分依据：上次 PAUSE 时的 layer；layer=0 视为新任务（拓竹切片刚上传就
+        #   进入 PAUSE 等用户点开始），layer>0 视为暂停恢复
+        if curr_state == PrinterState.RUNNING:
+            is_new_task = False
+            if prev_state not in (PrinterState.RUNNING, PrinterState.PAUSE):
+                is_new_task = True
+            elif prev_state == PrinterState.PAUSE:
+                pause_layer = self._pause_layer.get(serial, -1)
+                if pause_layer <= 0:
+                    is_new_task = True
+                    logger.info(
+                        "PAUSE->RUNNING 判定为新任务 (PAUSE 时 layer=0): %s",
+                        serial,
+                    )
+            if is_new_task:
+                await self.db.record_print_start(serial, status.gcode_file)
             # 区分真正的新任务和断线重连：上一个确定状态是 FINISH/FAILED/IDLE
             # 说明旧任务已结束，本次 RUNNING 是新任务（即使重打同名文件也要重置通知）；
             # 若确定状态是 RUNNING（如 RUNNING→UNKNOWN→RUNNING 断线重连）则不重置，
@@ -308,13 +355,19 @@ class PrintMonitor:
                 self._layer3_notified[serial] = False
                 self._progress50_notified[serial] = False
                 self._completed_notified[serial] = False
-                # 同步重置 wecom 层去重标记（重打同名文件时 reset_if_new_job 不会重置）
+                # 同步重置 wecom / feishu 层去重标记（重打同名文件时 reset_if_new_job 不会重置）
                 if self.wecom_notifier and serial in self.wecom_notifier._states:
                     st = self.wecom_notifier._states[serial]
                     st.last_gcode = curr_gcode
                     st.layer3_sent = False
                     st.progress50_sent = False
                     st.completed_sent = False
+                if self.feishu_notifier and serial in self.feishu_notifier._states:
+                    fst = self.feishu_notifier._states[serial]
+                    fst.last_gcode = curr_gcode
+                    fst.layer3_sent = False
+                    fst.completed_sent = False
+                    fst.last_error_snapshot = ""
 
         # 检测打印结束（RUNNING 或 PAUSE 进入终态都要结算：
         # 暂停中取消/失败走 PAUSE->FAILED，不结算会留下永久 running 的孤儿 session，
@@ -329,18 +382,36 @@ class PrintMonitor:
             ) else "failed"
             await self.db.record_print_end(serial, end_status)
             # 触发 completed 通知（_check_progress_events 在 FINISH 时不会进入）
-            if self.wecom_notifier and curr_state == PrinterState.FINISH:
+            if (self.wecom_notifier or self.feishu_notifier) and curr_state == PrinterState.FINISH:
                 logger.info(
                     "触发完成通知: %s file=%s",
                     serial, status.gcode_file,
                 )
-                self.wecom_notifier.notify(serial, "completed", status)
+                self._notify_all(serial, "completed", status)
 
         self._last_states[serial] = curr_state
         self._last_gcode[serial] = status.gcode_file
         self._update_definite_state(serial, curr_state)
+        # 记录进入 PAUSE 时的层数（用于后面 PAUSE->RUNNING 区分新任务/暂停恢复）
+        if curr_state == PrinterState.PAUSE:
+            self._pause_layer[serial] = status.current_layer
+        else:
+            self._pause_layer.pop(serial, None)
 
     def _update_definite_state(self, serial: str, state: PrinterState):
         """记录最后一次确定状态（跳过 UNKNOWN/OFFLINE 这类断线中间态）"""
         if state not in (PrinterState.UNKNOWN, PrinterState.OFFLINE):
             self._last_definite_state[serial] = state
+
+    def _notify_all(self, serial: str, event: str, status=None, errors=None):
+        """同时通知企业微信和飞书"""
+        if self.wecom_notifier:
+            try:
+                self.wecom_notifier.notify(serial, event, status, errors)
+            except Exception as e:
+                logger.warning("wecom.notify 异常 [%s]: %s", event, e)
+        if self.feishu_notifier:
+            try:
+                self.feishu_notifier.notify(serial, event, status, errors)
+            except Exception as e:
+                logger.warning("feishu.notify 异常 [%s]: %s", event, e)

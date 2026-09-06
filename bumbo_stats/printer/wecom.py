@@ -10,6 +10,8 @@
   WeComNotifier 维护一个 asyncio.Queue 和一个后台任务。
   PrintMonitor 调用 notify() 将事件入队（非阻塞）。
   后台任务消费队列，抓取摄像头帧，上传并发送到企业微信群聊。
+
+共享逻辑（指令解析 / 阈值 / 总览 HTML / 截图捕获等）从 .notify_common 复用。
 """
 
 import asyncio
@@ -20,6 +22,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from ..config import PrinterConfig
+from . import notify_common as nc
 
 # 静默第三方 SDK 日志（禁用所有相关日志处理器）
 for _lib in ["wecom_aibot_sdk", "websocket", "wsclient", "AiBotSDK"]:
@@ -40,59 +43,24 @@ class _SilentLogger:
     def warn(self, *args, **kwargs): pass
     def error(self, *args, **kwargs): pass
 
-# 通知事件类型
-EVENT_LAYER3 = "layer3"
-EVENT_PROGRESS50 = "progress50"
-EVENT_COMPLETED = "completed"
-EVENT_ERROR = "error"
+# 通知事件类型（从 notify_common 复用，确保 wecom / feishu 一致）
+EVENT_LAYER3 = nc.EVENT_LAYER3
+EVENT_PROGRESS50 = nc.EVENT_PROGRESS50
+EVENT_COMPLETED = nc.EVENT_COMPLETED
+EVENT_ERROR = nc.EVENT_ERROR
+EVENT_AI_ALARM = nc.EVENT_AI_ALARM
 
 # 每次通知发送的截图数量和间隔（降低挤出机遮挡概率）
-FRAMES_PER_NOTIFICATION = 2
-FRAME_INTERVAL = 30.0  # 秒
+FRAMES_PER_NOTIFICATION = nc.FRAMES_PER_NOTIFICATION
+FRAME_INTERVAL = nc.FRAME_INTERVAL
 
 # 连接守护检查间隔（秒）：SDK 被服务端踢下线（同凭证新连接顶替）或
 # 重连次数耗尽后会静默放弃，出站通知走 HTTP 不受影响，
 # 但群指令（WebSocket 入站）会永久失效，需定期检查并重建连接
 CONNECTION_CHECK_INTERVAL = 60.0
 
-# 群聊指令关键词与冷却时间（秒），按顺序匹配，命中即停
-SNAPSHOT_KEYWORDS = ("截图", "监控")
-COMMANDS = (
-    ("help", ("帮助", "help")),
-    ("overview", ("总览",)),
-    ("status", ("状态",)),
-    ("snapshot", SNAPSHOT_KEYWORDS),
-)
-COMMAND_COOLDOWN = {"snapshot": 10.0, "overview": 10.0, "status": 5.0, "help": 3.0}
-
-# 状态对应的图标
-_STATE_EMOJI = {
-    "RUNNING": "🟢",
-    "IDLE": "⚪",
-    "PAUSE": "⏸️",
-    "FINISH": "✅",
-    "FAILED": "❌",
-    "OFFLINE": "⚫",
-    "UNKNOWN": "❓",
-}
-
-
-def normalize_gcode(name: str) -> str:
-    """归一化 gcode 文件名用于任务比较
-
-    云端 API 任务名不含扩展名（如 "CUBE_2.4 wide"），
-    MQTT 上报为文件名（如 "CUBE_2.4 wide.3mf"），
-    直接比较会误判为新任务导致重复通知/任务误分割。
-    """
-    n = (name or "").strip()
-    changed = True
-    while changed:
-        changed = False
-        for ext in (".3mf", ".gcode"):
-            if n.lower().endswith(ext):
-                n = n[: -len(ext)]
-                changed = True
-    return n
+# 向后兼容：monitor.py / ai_guard.py 等仍 import 这些符号
+normalize_gcode = nc.normalize_gcode
 
 
 @dataclass
@@ -122,6 +90,7 @@ class _PrinterNotifState:
 @dataclass
 class WeComConfig:
     """企业微信机器人配置"""
+    enabled: bool = True         # 总开关（与 WeComSettings.enabled 同步）
     bot_id: str = ""
     secret: str = ""
     chatid: str = ""           # 群聊 chatid，留空则自动发现
@@ -167,25 +136,55 @@ class WeComNotifier:
         # WeCom WebSocket 客户端
         self._client = None
         self._chatid: str = wecom_config.chatid
+        self._ai_guard = None  # 由 bind_ai_guard() 注入（用于阈值指令）
         self._task: Optional[asyncio.Task] = None
         self._running = False
-        self._last_cmd_ts: dict[str, float] = {}  # 各指令上次触发时间
+        # 指令冷却控制（委托给 notify_common.CommandCooldown）
+        self._cmd_cooldown = nc.CommandCooldown()
 
     # ------------------------------------------------------------------
     # 公开 API
     # ------------------------------------------------------------------
 
-    def notify(self, serial: str, event: str, status=None, errors: list = None):
+    def notify(self, serial: str, event: str, status=None, errors: list = None, ai_alert=None, alarm_frames: list = None):
         """将通知事件加入队列（线程安全，非阻塞）
 
         Args:
             serial: 打印机序列号
-            event: 事件类型 (EVENT_LAYER3 / EVENT_PROGRESS50 / EVENT_COMPLETED / EVENT_ERROR)
+            event: 事件类型 (EVENT_LAYER3 / EVENT_PROGRESS50 / EVENT_COMPLETED / EVENT_ERROR / EVENT_AI_ALARM)
             status: 当前 PrinterStatus（可选，用于丰富消息内容）
             errors: 错误列表（仅 EVENT_ERROR 时使用）
+            ai_alert: DetectionResult（仅 EVENT_AI_ALARM 时使用）
+            alarm_frames: 触发报警的连续帧列表（仅 EVENT_AI_ALARM 时使用，直接发送无需重新抓帧）
         """
         state = self._states.get(serial)
         if not state:
+            return
+
+        # 总开关关闭时直接跳过（不入队，避免重连后补发历史事件）
+        if not self._cfg.enabled:
+            return
+
+        # AI 报警事件：无去重逻辑（冷却由 AIGuardLoop 控制）
+        if event == EVENT_AI_ALARM:
+            if not self._cfg.error:  # 复用 error 开关控制报警类通知
+                return
+            printer_name = self._printer_names.get(serial, serial[-6:])
+            try:
+                self._queue.put_nowait({
+                    "serial": serial,
+                    "printer_name": printer_name,
+                    "event": event,
+                    "status": status,
+                    "errors": errors,
+                    "ai_alert": ai_alert,
+                    "alarm_frames": alarm_frames,
+                    "ts": time.time(),
+                })
+                logger.info("企业微信 AI 报警入队: %s [P=%.3f]", printer_name,
+                            ai_alert.probability if ai_alert else 0)
+            except asyncio.QueueFull:
+                logger.warning("通知队列已满，丢弃: %s [ai_alarm]", printer_name)
             return
 
         # 去重检查
@@ -233,8 +232,15 @@ class WeComNotifier:
 
     async def start(self):
         """启动后台 WeCom 连接与通知处理任务"""
+        # 总开关关闭时不启动后台任务（避免空耗 WebSocket 连接）
+        if not self._cfg.enabled:
+            logger.info("企业微信通知已禁用（enabled=False），不启动后台任务")
+            return
         if not self._cfg.bot_id or not self._cfg.secret:
             logger.warning("企业微信 bot_id/secret 未配置，跳过通知模块")
+            return
+        if self._running:
+            logger.info("企业微信通知模块已在运行")
             return
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
@@ -256,8 +262,34 @@ class WeComNotifier:
                 pass
         logger.info("企业微信通知模块已停止")
 
+    def update_config(self, new_cfg: WeComConfig) -> bool:
+        """运行时更新配置（来自 /api/settings/wecom 重载）
+
+        仅更新内存中的配置对象；底层聊天连接根据 enabled 状态同步：
+        - enabled: True -> False：调用 stop() 释放 WebSocket 连接
+        - enabled: False -> True：调用 start() 重建连接
+
+        注意：本方法仅同步 _cfg 状态和切换动作，具体启停调用
+        应在事件循环中由 _reload_wecom_impl 完成。
+        """
+        was_enabled = self._cfg.enabled
+        self._cfg = new_cfg
+        # 优先使用配置的 chatid，其次保持已自动发现的 chatid
+        if new_cfg.chatid:
+            self._chatid = new_cfg.chatid
+        logger.info(
+            "企业微信配置已重载: enabled=%s layer3=%s progress50=%s completed=%s error=%s",
+            new_cfg.enabled, new_cfg.layer3, new_cfg.progress50,
+            new_cfg.completed, new_cfg.error,
+        )
+        return was_enabled != new_cfg.enabled
+
+    def bind_ai_guard(self, ai_guard) -> None:
+        """注入 AI 检测循环引用（用于阈值指令调用 set_threshold）"""
+        self._ai_guard = ai_guard
+
     async def send_test_message(self) -> bool:
-        """发送测试消息（包含所有打印机的摄像头截图）
+        """发送测试消息：一条文字 + 仅第一台打印机的 1 张截图
 
         Returns:
             True if successful, False otherwise
@@ -267,31 +299,31 @@ class WeComNotifier:
             return False
 
         try:
-            # 获取所有打印机的摄像头截图
-            frames = []
+            # 获取第一台可用的打印机截图（仅 1 张）
+            from datetime import datetime
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            first_frame = None
+            first_name = ""
             for serial, name in self._printer_names.items():
                 frame = await self._capture_one(serial)
                 if frame:
-                    frames.append((name, frame))
+                    first_frame = frame
+                    first_name = name
                     logger.info("获取测试截图成功: %s", name)
+                    break
                 else:
                     logger.warning("获取测试截图失败: %s", name)
 
-            # 构建测试消息
-            from datetime import datetime
-            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            printer_list = "\n".join([f"- {name}" for name, _ in frames])
-
+            all_printers = "、".join(self._printer_names.values())
             markdown = f"""## 🧪 配置测试消息
 
 > {now}
 
 **发送者**: Bumbo Stats 监控面板
 
-**测试打印机截图**:
-{printer_list}
+**打印机列表**: {all_printers}
 
-*如果看到此消息，说明企业微信配置成功！*"""
+*如果看到此消息和下面这张截图，说明企业微信配置成功！*"""
 
             # 优先使用配置的 chatid，否则等待自动发现的 chatid
             chatid = self._cfg.chatid or self._chatid
@@ -317,26 +349,31 @@ class WeComNotifier:
             await client.connect()
             await asyncio.sleep(2)
 
-            # 发送文字消息
+            # 1. 发文字（markdown）
             await client.send_message(chatid, {
                 "msgtype": "markdown",
                 "markdown": {"content": markdown},
             })
 
-            # 发送截图
-            ts = int(time.time())
-            for i, (name, frame) in enumerate(frames):
-                media_id = await client.upload_media(
-                    frame,
-                    type="image",
-                    filename=f"test_{ts}_{i+1}.jpg",
-                )
-                await client.send_media_message(
-                    chatid,
-                    media_type="image",
-                    media_id=media_id["media_id"],
-                )
-                logger.info("测试截图发送成功: %s", name)
+            # 2. 发 1 张截图（image）
+            if first_frame:
+                ts = int(time.time())
+                try:
+                    res = await client.upload_media(
+                        first_frame,
+                        type="image",
+                        filename=f"test_{ts}.jpg",
+                    )
+                    await client.send_media_message(
+                        chatid,
+                        media_type="image",
+                        media_id=res["media_id"],
+                    )
+                    logger.info("测试截图发送成功: %s", first_name)
+                except Exception as e:
+                    logger.warning("测试截图上传/发送失败: %s", e)
+            else:
+                logger.warning("无可用摄像头帧，仅发送文字测试消息")
 
             await client.disconnect()
             logger.info("企业微信测试消息发送完成")
@@ -394,6 +431,8 @@ class WeComNotifier:
                             await self._process_overview(item)
                         elif item.get("event") == "help":
                             await self._process_help(item)
+                        elif item.get("event") == "threshold":
+                            await self._process_threshold(item)
                         else:
                             await self._process_notification(item)
                     except asyncio.TimeoutError:
@@ -439,20 +478,20 @@ class WeComNotifier:
         text = self._extract_text(body)
         if not text:
             return
-        for cmd, keywords in COMMANDS:
-            if any(kw in text for kw in keywords):
-                now = time.time()
-                cooldown = COMMAND_COOLDOWN.get(cmd, 5.0)
-                if now - self._last_cmd_ts.get(cmd, 0.0) < cooldown:
-                    logger.info("指令 [%s] 冷却中，忽略: %s", cmd, text.strip()[:50])
-                    return
-                self._last_cmd_ts[cmd] = now
-                try:
-                    self._queue.put_nowait({"event": cmd, "ts": now})
-                    logger.info("收到指令 [%s]，已入队: %s", cmd, text.strip()[:50])
-                except asyncio.QueueFull:
-                    logger.warning("通知队列已满，丢弃指令 [%s]", cmd)
-                return
+        parsed = nc.parse_command(text)
+        if not parsed:
+            return
+        if not self._cmd_cooldown.check(parsed.command):
+            return
+        try:
+            self._queue.put_nowait({
+                "event": parsed.command, "ts": time.time(),
+                "raw_text": parsed.raw_text,
+                "numeric_value": parsed.numeric_value,
+            })
+            logger.info("收到指令 [%s]，已入队: %s", parsed.command, text.strip()[:50])
+        except asyncio.QueueFull:
+            logger.warning("通知队列已满，丢弃指令 [%s]", parsed.command)
 
     @staticmethod
     def _extract_text(body: dict) -> str:
@@ -534,7 +573,7 @@ class WeComNotifier:
         else:
             statuses = self._manager.get_all_statuses()
             for serial, st in statuses.items():
-                emoji = _STATE_EMOJI.get(st.state.value, "❓")
+                emoji = nc.state_emoji(st.state.value) or "❓"
                 lines.append(f"**{emoji} {st.name}** ({st.state.value})")
                 if st.gcode_file:
                     lines.append(f"- 文件: {st.gcode_file}")
@@ -560,67 +599,60 @@ class WeComNotifier:
             logger.error("状态指令发送失败: %s", e)
 
     async def _process_help(self, item: dict):
-        """响应帮助指令：列出所有支持的指令"""
+        """响应帮助指令：列出所有支持的指令（文本来自 notify_common.HELP_TEXT）"""
         chatid = self._cfg.chatid or self._chatid
         if not chatid:
             logger.warning("chatid 未就绪，跳过帮助指令")
             return
 
-        markdown = """## 🤖 支持的指令
-
-@机器人 发送含以下关键词的消息即可触发：
-
-- **截图** / **监控** — 发送所有打印机实时摄像头截图
-- **状态** — 文字回复所有打印机当前状态（层数/进度/剩余时间/温度）
-- **总览** — 生成监控面板完整长截图（含状态+截图+产能图表）
-- **帮助** — 显示本消息
-
-另外会自动推送：打印到第 3 层、打印完成、HMS 异常告警"""
-
         try:
             await self._client.send_message(chatid, {
                 "msgtype": "markdown",
-                "markdown": {"content": markdown},
+                "markdown": {"content": nc.HELP_TEXT},
             })
             logger.info("✅ 帮助指令已响应")
         except Exception as e:
             logger.error("帮助指令发送失败: %s", e)
 
+    async def _process_threshold(self, item: dict):
+        """响应阈值指令：动态修改 AI 异常检测阈值
+
+        用法:
+            阈值 0.6      -> 修改阈值为 0.6
+            阈值          -> 仅查询当前阈值
+
+        从 numeric_value 提取浮点数（0.0 ~ 1.0）。
+        阈值修改会自动调用 AIGuardLoop.set_threshold，
+        该方法会调用 on_threshold_changed 回调写回 printers.yaml，
+        重启服务后仍然生效。
+        """
+        chatid = self._cfg.chatid or self._chatid
+        if not chatid:
+            logger.warning("chatid 未就绪，跳过阈值指令")
+            return
+
+        md = nc.build_threshold_message(
+            self._ai_guard, item.get("numeric_value"),
+        )
+
+        try:
+            await self._client.send_message(chatid, {
+                "msgtype": "markdown",
+                "markdown": {"content": md},
+            })
+            logger.info("✅ 阈值指令已响应")
+        except Exception as e:
+            logger.error("阈值指令发送失败: %s", e)
+
     @staticmethod
     async def _render_overview_image(html: str) -> Optional[bytes]:
         """用无头浏览器（系统 Edge 内核）将总览 HTML 渲染为长截图 JPEG
 
+        委托给 notify_common.render_overview_image。
         渲染失败（未安装 playwright / 无 Edge）时返回 None，
         由调用方回退为 HTML 文件发送。
         """
-        try:
-            from playwright.async_api import async_playwright
-        except ImportError:
-            logger.warning("playwright 未安装，总览回退为 HTML 文件发送")
-            return None
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(channel="msedge", headless=True)
-                try:
-                    page = await browser.new_page(
-                        viewport={"width": 760, "height": 600},
-                        device_scale_factor=2,  # 2x 渲染，手机上放大看清晰
-                    )
-                    await page.set_content(html, wait_until="load")
-                    # 企业微信图片消息限制 2MB，超限时逐档降低质量
-                    img = b""
-                    for quality in (80, 60, 40):
-                        img = await page.screenshot(
-                            full_page=True, type="jpeg", quality=quality
-                        )
-                        if len(img) <= 1_900_000:
-                            break
-                    return img
-                finally:
-                    await browser.close()
-        except Exception as e:
-            logger.warning("总览长截图渲染失败: %s，回退为 HTML 文件发送", e)
-            return None
+        return await nc.render_overview_image(html)
 
     async def _process_overview(self, item: dict):
         """响应总览指令：生成与网页面板一致的长截图发送到群聊
@@ -635,12 +667,11 @@ class WeComNotifier:
             return
 
         # 抓取所有打印机当前帧和状态
-        import base64
-        snapshots: dict[str, str] = {}  # serial -> base64 jpeg
+        snapshots: dict[str, bytes] = {}  # serial -> JPEG bytes（委托 build_overview_html）
         for serial in self._printer_names:
             frame = await self._capture_one(serial)
             if frame:
-                snapshots[serial] = base64.b64encode(frame).decode()
+                snapshots[serial] = frame
 
         statuses = self._manager.get_all_statuses() if self._manager else {}
 
@@ -655,7 +686,10 @@ class WeComNotifier:
             except Exception as e:
                 logger.warning("获取产能数据失败: %s", e)
 
-        html = self._build_overview_html(statuses, snapshots, today_usage, monthly_usage)
+        html = nc.build_overview_html(
+            self._printer_names, self._printer_locations,
+            statuses, snapshots, today_usage, monthly_usage,
+        )
 
         from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -697,192 +731,22 @@ class WeComNotifier:
         except Exception as e:
             logger.error("总览指令发送失败: %s", e)
 
-    @staticmethod
-    def _build_monthly_svg(monthly_usage: list) -> str:
-        """用 SVG 绘制近30天产能饱和度折线图（自包含，无需 JS）"""
-        if not monthly_usage or not any(m.points for m in monthly_usage):
-            return '<div class="no-img">暂无产能数据</div>'
-
-        colors = ["#10b981", "#3b82f6", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"]
-        dates = sorted({p.date for m in monthly_usage for p in m.points})
-        n = len(dates)
-        max_pct = max((p.utilization_percent for m in monthly_usage for p in m.points), default=0)
-        # y 轴上限：向上取整到 25 的倍数，至少 25，最多 100
-        ymax = min(100, max(25, int((max_pct + 24.99) // 25) * 25))
-
-        x0, y0, x1, y1 = 55, 15, 745, 205  # 绘图区
-        def px(i):  # 第 i 个日期的 x 坐标
-            return x0 + (x1 - x0) * (i / (n - 1)) if n > 1 else (x0 + x1) / 2
-        def py(v):  # 百分比 v 的 y 坐标
-            return y1 - (y1 - y0) * (min(v, ymax) / ymax)
-
-        parts = []
-        # 网格线 + y 轴刻度
-        steps = 4
-        for s in range(steps + 1):
-            v = ymax * s / steps
-            y = py(v)
-            parts.append(f'<line x1="{x0}" y1="{y:.1f}" x2="{x1}" y2="{y:.1f}" stroke="#374151" stroke-width="1"/>')
-            parts.append(f'<text x="{x0 - 8}" y="{y + 4:.1f}" text-anchor="end" fill="#9ca3af" font-size="11">{v:.0f}%</text>')
-        # x 轴日期标签（首/中/尾）
-        for i in {0, n // 2, n - 1}:
-            parts.append(f'<text x="{px(i):.1f}" y="{y1 + 18}" text-anchor="middle" fill="#9ca3af" font-size="11">{str(dates[i])[5:]}</text>')
-        # 每台打印机的折线
-        legends = []
-        for idx, m in enumerate(monthly_usage):
-            color = colors[idx % len(colors)]
-            pts = " ".join(
-                f"{px(dates.index(p.date)):.1f},{py(p.utilization_percent):.1f}"
-                for p in sorted(m.points, key=lambda p: p.date)
-            )
-            if pts:
-                parts.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="2"/>')
-            legends.append(
-                f'<span class="legend-item"><span class="dot" style="background:{color}"></span>{m.printer_name}</span>'
-            )
-
-        return (
-            f'<svg viewBox="0 0 760 235" style="width:100%;height:auto">{"".join(parts)}</svg>'
-            f'<div class="legend">{"".join(legends)}</div>'
-        )
-
-    def _build_overview_html(self, statuses: dict, snapshots: dict[str, str],
-                             today_usage: list = None, monthly_usage: list = None) -> str:
-        """生成自包含的监控总览 HTML，内容与网页面板四个区块一致"""
-        from datetime import datetime
-        from html import escape
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        today_usage = today_usage or []
-        monthly_usage = monthly_usage or []
-
-        # 区块1：📷 实时监控（摄像头截图）
-        cam_cards = []
-        for serial, name in self._printer_names.items():
-            img_b64 = snapshots.get(serial, "")
-            img_html = (
-                f'<img src="data:image/jpeg;base64,{img_b64}" alt="{escape(name)}">'
-                if img_b64 else '<div class="no-img">无摄像头画面</div>'
-            )
-            loc = self._printer_locations.get(serial, "")
-            st = statuses.get(serial)
-            state_val = st.state.value if st else "OFFLINE"
-            cam_cards.append(f"""
-    <div class="card">
-      <div class="card-head"><h3>{escape(name)}</h3><span class="loc">{escape(loc)}</span></div>
-      <div class="cam-wrap">{img_html}<span class="state-tag">{state_val}</span></div>
-    </div>""")
-
-        # 区块2：📊 打印机状态（与网页卡片字段一致）
-        stat_cards = []
-        for serial, name in self._printer_names.items():
-            st = statuses.get(serial)
-            if st:
-                state_val = st.state.value
-                emoji = _STATE_EMOJI.get(state_val, "❓")
-                progress = st.progress
-                h, m = divmod(st.remaining_time, 60)
-                eta = (f"{h}小时{m}分钟" if h else f"{m}分钟") if st.remaining_time > 0 else "--"
-                rows = f"""
-        <tr><td>状态</td><td>{emoji} {state_val}</td></tr>
-        <tr><td>进度</td><td>{progress}%</td></tr>
-        <tr><td>喷嘴温度</td><td>{st.nozzle_temp:.0f} / {st.nozzle_target_temp:.0f}℃</td></tr>
-        <tr><td>热床温度</td><td>{st.bed_temp:.0f} / {st.bed_target_temp:.0f}℃</td></tr>
-        <tr><td>机箱温度</td><td>{st.chamber_temp:.0f}℃</td></tr>
-        <tr><td>剩余时间</td><td>{eta}</td></tr>
-        <tr><td>层数</td><td>{st.current_layer} / {st.total_layers}</td></tr>
-        <tr><td>文件</td><td>{escape(st.gcode_file) or '--'}</td></tr>
-        <tr><td>HMS 异常</td><td>{len(st.hms_errors) or '无'}</td></tr>"""
-            else:
-                progress = 0
-                rows = '<tr><td>状态</td><td>⚫ 无数据</td></tr>'
-            stat_cards.append(f"""
-    <div class="card">
-      <h3>{escape(name)}</h3>
-      <div class="bar"><div class="fill" style="width:{progress}%"></div></div>
-      <table>{rows}</table>
-    </div>""")
-
-        # 区块3：🏭 今日产能饱和度
-        util_rows = []
-        for u in today_usage:
-            pct = u.utilization_percent
-            util_rows.append(f"""
-    <div class="util-row">
-      <span class="util-name">{escape(u.printer_name)}</span>
-      <span class="util-pct">{pct:.1f}%</span>
-      <div class="util-track"><div class="util-fill" style="width:{min(pct, 100):.1f}%"></div></div>
-      <span class="util-time">{escape(u.print_time_display)}</span>
-    </div>""")
-        util_html = "".join(util_rows) or '<div class="no-img">暂无产能数据</div>'
-
-        # 区块4：📈 近30天产能趋势（SVG 折线图）
-        chart_html = self._build_monthly_svg(monthly_usage)
-
-        return f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bumbo Stats 监控总览 {now}</title>
-<style>
-  body {{ font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-         background: #111827; color: #e5e7eb; margin: 0; padding: 24px; }}
-  h1 {{ font-size: 20px; margin: 0; }} .ts {{ color: #9ca3af; font-size: 13px; margin: 6px 0 4px; }}
-  h2 {{ font-size: 16px; margin: 28px 0 12px; border-left: 3px solid #10b981; padding-left: 10px; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }}
-  .card {{ background: #1f2937; border-radius: 12px; padding: 16px; }}
-  .card h3 {{ font-size: 15px; margin: 0 0 10px; }}
-  .card-head {{ display: flex; justify-content: space-between; align-items: center; }}
-  .loc {{ color: #9ca3af; font-size: 12px; }}
-  .cam-wrap {{ position: relative; }}
-  .cam-wrap img {{ width: 100%; border-radius: 8px; display: block; }}
-  .state-tag {{ position: absolute; top: 8px; left: 8px; background: rgba(0,0,0,.6);
-                padding: 2px 8px; border-radius: 6px; font-size: 12px; }}
-  .no-img {{ height: 180px; display: flex; align-items: center; justify-content: center;
-             background: #374151; border-radius: 8px; color: #9ca3af; }}
-  .bar {{ height: 6px; background: #374151; border-radius: 3px; margin: 10px 0; }}
-  .fill {{ height: 100%; background: #10b981; border-radius: 3px; }}
-  table {{ width: 100%; font-size: 13px; border-collapse: collapse; }}
-  td {{ padding: 4px 0; border-bottom: 1px solid #374151; }}
-  td:first-child {{ color: #9ca3af; width: 90px; }}
-  .panel {{ background: #1f2937; border-radius: 12px; padding: 16px; }}
-  .util-row {{ display: flex; align-items: center; gap: 12px; padding: 8px 0;
-               border-bottom: 1px solid #374151; }}
-  .util-name {{ width: 90px; font-size: 14px; }}
-  .util-pct {{ width: 60px; text-align: right; font-size: 14px; color: #10b981; }}
-  .util-track {{ flex: 1; height: 8px; background: #374151; border-radius: 4px; }}
-  .util-fill {{ height: 100%; background: #10b981; border-radius: 4px; }}
-  .util-time {{ width: 80px; text-align: right; color: #9ca3af; font-size: 13px; }}
-  .legend {{ margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }}
-  .legend-item {{ display: inline-flex; align-items: center; gap: 6px; }}
-  .dot {{ width: 10px; height: 10px; border-radius: 50%; display: inline-block; }}
-</style>
-</head>
-<body>
-<h1>🖨️ Bumbo Stats 监控总览</h1>
-<div class="ts">快照时间: {now}</div>
-<h2>📷 实时监控</h2>
-<div class="grid">{''.join(cam_cards)}
-</div>
-<h2>📊 打印机状态</h2>
-<div class="grid">{''.join(stat_cards)}
-</div>
-<h2>🏭 今日产能饱和度</h2>
-<div class="panel">{util_html}
-</div>
-<h2>📈 近30天产能饱和度趋势</h2>
-<div class="panel">{chart_html}
-</div>
-</body>
-</html>"""
+    # ------------------------------------------------------------------
+    # 总览 HTML 生成（已委托给 notify_common）
+    # ------------------------------------------------------------------
+    # 以下两个函数为向后兼容的薄包装：原代码若曾调用 WeComNotifier._build_monthly_svg /
+    # _build_overview_html 会通过类查找但仍指向 nc 实现（避免修改调用点）。
+    # 注：notify_common 已提供更完整的实现，推荐新代码直接调用 nc.build_overview_html。
 
     async def _process_notification(self, item: dict):
-        """处理一条通知：抓帧 → 上传 → 发送"""
+        """处理一条通知：发文字 + 1张截图（两条消息）"""
         serial = item["serial"]
         printer_name = item["printer_name"]
         event = item["event"]
         status = item.get("status")
         errors = item.get("errors")
+        ai_alert = item.get("ai_alert")
+        alarm_frames = item.get("alarm_frames")
 
         # 优先使用配置的 chatid，否则等待自动发现的 chatid
         chatid = self._cfg.chatid or self._chatid
@@ -897,113 +761,115 @@ class WeComNotifier:
                 logger.warning("chatid 超时，跳过本次通知")
                 return
 
-        # HMS 错误通知不发截图，只发文字（错误信息已经包含关键视觉信息）
-        frames = [] if event == EVENT_ERROR else await self._get_camera_frames(serial)
+        # 截图获取策略：
+        # - AI 报警：优先使用触发报警时缓存的帧（无需重新抓帧，无间隔延迟）
+        # - HMS 错误：不发截图（错误信息已包含关键信息）
+        # - 其他事件：实时抓 1 张帧
+        if alarm_frames:
+            frames = alarm_frames[:1]
+        elif event == EVENT_ERROR:
+            frames = []
+        else:
+            all_frames = await self._get_camera_frames(serial)
+            frames = all_frames[:1] if all_frames else []
 
-        # 构建 markdown 消息
-        markdown = self._build_markdown(printer_name, event, status, errors)
+        # 上传 1 张截图到企微临时素材，返回 media_id
+        media_id: Optional[str] = None
+        if frames and self._client:
+            ts = int(time.time())
+            try:
+                res = await self._client.upload_media(
+                    frames[0], type="image", filename=f"{serial}_{event}_{ts}.jpg",
+                )
+                media_id = res["media_id"]
+            except Exception as e:
+                logger.warning("上传截图失败 %s [%s]: %s", printer_name, event, e)
+
+        # 构建文字 markdown 消息
+        md = self._build_markdown(
+            printer_name, event, status, errors, ai_alert=ai_alert,
+        )
 
         try:
-            # 先发文字状态
+            # 1. 发文字（markdown）
             await self._client.send_message(chatid, {
                 "msgtype": "markdown",
-                "markdown": {"content": markdown},
+                "markdown": {"content": md},
             })
 
-            # 再发送所有截图
-            ts = int(time.time())
-            for i, frame in enumerate(frames):
-                if not self._client:
-                    break
-                upload_result = await self._client.upload_media(
-                    frame,
-                    type="image",
-                    filename=f"{serial}_{event}_{ts}_{i+1}.jpg",
-                )
-                media_id = upload_result["media_id"]
+            # 2. 发 1 张图片（image）
+            if media_id:
                 await self._client.send_media_message(
                     chatid,
                     media_type="image",
                     media_id=media_id,
                 )
-
-            if frames:
                 logger.info(
-                    "✅ 已发送监控截图: %s [%s] %d张",
-                    printer_name, event, len(frames),
+                    "✅ 已发送文字+截图: %s [%s] (1张)",
+                    printer_name, event,
                 )
             elif event != EVENT_ERROR:
-                logger.warning("无摄像头帧，仅发送文字通知: %s", printer_name)
+                logger.warning("无摄像头帧，仅发送文字: %s", printer_name)
 
         except Exception as e:
             logger.error("企业微信发送失败: %s [%s] %s", printer_name, event, e)
 
+    async def _upload_images(self, frames: list[bytes], prefix: str) -> list[str]:
+        """上传多张图片到企微临时素材，返回 media_id 列表
+
+        现仅使用 1 张图（文字+1张图片消息组合），保留上传多张能力供未来扩展。
+        """
+        media_ids: list[str] = []
+        if not self._client:
+            return media_ids
+        for i, frame in enumerate(frames[:1]):
+            try:
+                result = await self._client.upload_media(
+                    frame, type="image", filename=f"{prefix}_{i+1}.jpg",
+                )
+                media_ids.append(result["media_id"])
+            except Exception as e:
+                logger.warning("上传截图 %s_%d 失败: %s", prefix, i + 1, e)
+        return media_ids
+
     async def _get_camera_frames(self, serial: str) -> list[bytes]:
-        """获取多张摄像头帧，间隔 FRAME_INTERVAL 秒，降低遮挡概率"""
-        frames: list[bytes] = []
-        for i in range(FRAMES_PER_NOTIFICATION):
-            if i > 0:
-                await asyncio.sleep(FRAME_INTERVAL)
-            frame = await self._capture_one(serial)
-            if frame:
-                frames.append(frame)
-        return frames
+        """获取多张摄像头帧（委托给 notify_common）"""
+        return await nc.capture_camera_frames(
+            self._camera, serial,
+            frames_per_notification=FRAMES_PER_NOTIFICATION,
+            frame_interval=FRAME_INTERVAL,
+        )
 
     async def _capture_one(self, serial: str) -> Optional[bytes]:
-        """获取单张摄像头帧：优先从 CameraManager 缓存，失败则直连"""
-        # 优先从缓存获取（低延迟）
-        if self._camera:
-            frame = await self._camera.get_frame(serial)
-            if frame:
-                return frame
-
-        # 缓存没有，直连获取（高延迟，但确保拿到帧）
-        config_ip = None
-        config_code = None
-        for pc in self._camera._configs.values() if self._camera else []:
-            if pc.serial == serial:
-                config_ip = pc.ip
-                config_code = pc.access_code
-                break
-
-        if not config_ip or not config_code:
-            return None
-
-        try:
-            def _capture():
-                from bambulab import JPEGFrameStream
-                s = JPEGFrameStream(config_ip, config_code)
-                s.connect()
-                f = s.get_frame()
-                s.disconnect()
-                return f
-            frame = await asyncio.to_thread(_capture)
-            return frame if isinstance(frame, (bytes, bytearray)) else None
-        except Exception as e:
-            logger.warning("直连摄像头失败 %s: %s", serial, e)
-            return None
+        """获取单张摄像头帧（委托给 notify_common）"""
+        return await nc.capture_camera_one(self._camera, serial)
 
     @staticmethod
-    def _build_markdown(printer_name: str, event: str, status, errors=None) -> str:
-        """构建 Markdown 格式的通知消息
+    def _build_markdown(
+        printer_name: str, event: str, status, errors=None,
+        ai_alert=None,
+    ) -> str:
+        """构建 markdown 文字消息
 
-        Args:
-            printer_name: 打印机名称
-            event: 事件类型
-            status: PrinterStatus
-            errors: 错误列表（仅 EVENT_ERROR 时使用）
+        返回完整 markdown 文本（不含图片），由发送流程单独推送图片消息。
+
+        事件类型:
+            layer3/progress50/completed/error/ai_alarm
         """
         from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # ---- 1. 标题（emoji + 事件类型）----
         if event == EVENT_LAYER3:
             title = "🖨️ 打印已到达第 3 层"
         elif event == EVENT_PROGRESS50:
-            title = "⏳ 打印进度已过半 (50%)"
+            title = "⏳ 打印进度已过半"
         elif event == EVENT_COMPLETED:
             title = "✅ 打印已完成"
         elif event == EVENT_ERROR:
             title = "🚨 打印机异常"
+        elif event == EVENT_AI_ALARM:
+            title = "🤖 AI 检测到打印异常"
         else:
             title = f"📢 {event}"
 
@@ -1011,20 +877,35 @@ class WeComNotifier:
         layer = getattr(status, "current_layer", 0)
         total = getattr(status, "total_layers", 0)
         progress = getattr(status, "progress", 0)
+        st = getattr(status, "state", "") or ""
 
-        lines = [
-            f"## {title}",
-            f"> {now}",
-            "",
-            f"**打印机**: {printer_name}",
-        ]
+        # ---- 2. 正文 ----
+        lines: list[str] = []
+        lines.append(f"## {title}")
+        lines.append("")
+        lines.append(f"> {now}")
+        lines.append("")
+        lines.append(f"**打印机**: {printer_name}")
         if gcode:
             lines.append(f"**文件**: {gcode}")
+
         if total > 0:
             lines.append(f"**层数**: {layer}/{total}")
             lines.append(f"**进度**: {progress}%")
+        if st:
+            emoji = nc.state_emoji(st) or ""
+            if emoji:
+                lines.append(f"**状态**: {emoji} {st}")
+            else:
+                lines.append(f"**状态**: {st}")
 
-        # HMS 错误：使用注册表提供更友好的中文错误名和建议
+        if event == EVENT_AI_ALARM and ai_alert:
+            lines.append("")
+            lines.append(f"**异常概率**: {ai_alert.probability:.1%}")
+            lines.append(f"**检测信息**: {ai_alert.message}")
+            lines.append("")
+            lines.append("💡 建议立即检查打印机，报警图片已保存至 `alerts_review/` 目录待审核")
+
         if event == EVENT_ERROR and errors:
             lines.append("")
             from ..models import lookup_hms_error
@@ -1032,13 +913,14 @@ class WeComNotifier:
                 info = lookup_hms_error(err.code)
                 cat = info.get("category", "未知")
                 suggestion = info.get("suggestion", "")
-                # 优先用注册表中文名，其次用云端原始消息
                 name = info.get("cn", err.message) if err.message else info.get("cn", "未知错误")
                 lines.append(f"- **{name}** ({cat})")
                 if suggestion:
-                    lines.append(f"  💡 {suggestion}")
-                # 保留原始信息便于排查
-                lines.append(f"  📋 原始: {err.message or '(无)'}")
-                lines.append(f"  🔢 码: 0x{err.code:08X}")
+                    lines.append(f"  - 💡 {suggestion}")
+                lines.append(f"  - 📋 原始: {err.message or '(无)'}")
+                lines.append(f"  - 🔢 码: `0x{err.code:08X}`")
+
+        lines.append("")
+        lines.append(f"[打开监控面板](http://192.168.31.177:8000/)")
 
         return "\n".join(lines)

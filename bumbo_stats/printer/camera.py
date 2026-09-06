@@ -87,6 +87,38 @@ class CameraManager:
         async with self._lock:
             return self._frame_cache.get(serial)
 
+    async def capture_fresh_frame(self, serial: str) -> Optional[bytes]:
+        """主动抓取一张新摄像头帧（绕过缓存，确保拿到的是新帧）
+
+        用于 AI 检测等需要明确时间间隔的场景，避免从缓存拿到相同帧。
+
+        Args:
+            serial: 打印机序列号
+
+        Returns:
+            新抓取的 JPEG 帧数据，失败时返回 None
+        """
+        config = self._configs.get(serial)
+        if not config or not config.ip or not config.access_code:
+            return None
+        try:
+            def _get_frame():
+                from bambulab import JPEGFrameStream
+                with JPEGFrameStream(config.ip, config.access_code) as stream:
+                    return stream.get_frame()
+
+            frame = await asyncio.to_thread(_get_frame)
+            if frame and isinstance(frame, (bytes, bytearray)):
+                f = bytes(frame)
+                # 同步刷新缓存，避免其他模块读到旧帧
+                async with self._lock:
+                    self._frame_cache[serial] = f
+                return f
+            return None
+        except Exception as e:
+            logger.debug("主动抓取摄像头帧失败 %s: %s", serial, e)
+            return None
+
     def is_supported(self, serial: str) -> bool:
         """检查打印机是否支持摄像头
 

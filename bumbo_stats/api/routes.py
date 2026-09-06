@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request, HTTPException, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ..config import PrinterConfig
 
@@ -131,6 +131,7 @@ class CloudUpdate(BaseModel):
 
 
 class WeComUpdate(BaseModel):
+    enabled: bool = True
     bot_id: str
     secret: str
     chatid: str = ""
@@ -146,8 +147,15 @@ class FeishuUpdate(BaseModel):
     chatid: str = ""
     enabled: bool = False
     layer3: bool = True
+    progress50: bool = True
     completed: bool = True
     error: bool = True
+    urgent_user_id: str = ""
+    urgent_on_events: list[str] = Field(
+        default_factory=lambda: ["error"],
+        description="触发应用内加急的事件列表",
+    )
+    urgent_max_per_hour: int = 10
 
 
 class PrinterUpdate(BaseModel):
@@ -182,6 +190,7 @@ async def save_wecom(request: Request, body: WeComUpdate):
         raise HTTPException(status_code=401, detail="未登录")
 
     config = request.app.state.config
+    config.wecom.enabled = body.enabled
     config.wecom.bot_id = body.bot_id
     config.wecom.secret = body.secret
     config.wecom.chatid = body.chatid
@@ -210,8 +219,12 @@ async def save_feishu(request: Request, body: FeishuUpdate):
     config.feishu.chatid = body.chatid
     config.feishu.enabled = body.enabled
     config.feishu.layer3 = body.layer3
+    config.feishu.progress50 = body.progress50
     config.feishu.completed = body.completed
     config.feishu.error = body.error
+    config.feishu.urgent_user_id = body.urgent_user_id
+    config.feishu.urgent_on_events = body.urgent_on_events
+    config.feishu.urgent_max_per_hour = body.urgent_max_per_hour
     config.save_yaml()
 
     # 通知模块重载配置
@@ -352,3 +365,44 @@ async def get_sessions(request: Request, serial: str, limit: int = 20):
     db = request.app.state.db
     sessions = await db.get_sessions(serial, limit=limit)
     return [s.model_dump(mode="json") for s in sessions]
+
+
+# ---------------------------------------------------------------------------
+# AI 推理 API
+# ---------------------------------------------------------------------------
+
+@router.post("/api/ai/detect/{serial}")
+async def ai_detect(request: Request, serial: str):
+    """手动触发单帧 AI 推理
+
+    返回推理结果和摄像头截图，不触发报警流程。
+    每次推理都会保存图片到本地（由 ai_guard 统一处理）：
+    - 异常: data/alerts_review/
+    - 正常: data/normal_review/
+    """
+    import base64
+
+    camera = request.app.state.camera_manager
+    ai_guard = getattr(request.app.state, "_ai_guard", None)
+
+    if not ai_guard or not ai_guard.is_available:
+        raise HTTPException(status_code=503, detail="AI detector not available")
+
+    # 获取摄像头帧
+    frame = await camera.get_frame(serial)
+    if not frame:
+        raise HTTPException(status_code=503, detail="Camera frame not available")
+
+    # 执行推理（图片保存在 ai_guard.detect_single 中处理）
+    result = await ai_guard.detect_single(frame, serial)
+
+    # 附加打印机名称
+    manager = request.app.state.printer_manager
+    status = manager.get_status(serial)
+    result["printer_name"] = status.name
+    result["printer_state"] = status.state.value
+
+    # 附加摄像头截图 (base64)
+    result["image"] = base64.b64encode(frame).decode()
+
+    return result

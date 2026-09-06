@@ -671,6 +671,104 @@ class TestWeComNotifierDeduplication:
         notifier.notify("S001", EVENT_LAYER3, status)
         assert notifier._queue.qsize() == 0  # 未入队
 
+    async def test_tc_notify_51_wecom_master_switch_disabled_no_queue(self):
+        """TC-NOTIFY-51: 总开关 enabled=False 时，所有事件均不入队（不限于单项事件）"""
+        from bumbo_stats.config import PrinterConfig
+
+        cfg = _make_wecom_config()
+        cfg.enabled = False  # 禁用总开关
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        notifier = WeComNotifier(cfg, [printer_cfg])
+        notifier._queue = asyncio.Queue(maxsize=10)
+        notifier._chatid = "test_chatid"
+
+        # 任意事件都应被总开关拦截
+        status = _make_status("S001", current_layer=3, total_layers=100, progress=3)
+        notifier.notify("S001", EVENT_LAYER3, status)
+        notifier.notify("S001", EVENT_PROGRESS50, status)
+        notifier.notify("S001", EVENT_COMPLETED, status)
+
+        hms = [HMSError(code=0x0B01, severity="error", message="堵嘴检测")]
+        notifier.notify("S001", EVENT_ERROR, status, errors=hms)
+
+        assert notifier._queue.qsize() == 0
+
+    async def test_tc_notify_52_wecom_master_switch_disabled_start_skipped(self):
+        """TC-NOTIFY-52: enabled=False 时 start() 不创建后台任务、也不重连 WebSocket"""
+        from bumbo_stats.config import PrinterConfig
+
+        cfg = _make_wecom_config()
+        cfg.enabled = False
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        notifier = WeComNotifier(cfg, [printer_cfg])
+
+        await notifier.start()
+        # 启动被跳过，_running 仍为 False，后台任务未创建
+        assert notifier._running is False
+        assert notifier._task is None
+
+    async def test_tc_notify_53_wecom_update_config_returns_changed(self):
+        """TC-NOTIFY-53: update_config 返回 enabled 状态是否变化（用于触发启停切换）"""
+        from bumbo_stats.config import PrinterConfig
+
+        cfg = _make_wecom_config()
+        cfg.enabled = True
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        notifier = WeComNotifier(cfg, [printer_cfg])
+
+        # enabled 未变（其他字段变更） → 返回 False
+        new_cfg = WeComConfig(
+            enabled=True, bot_id="fake_bot_id", secret="fake_secret",
+            chatid="", layer3=False, progress50=True, completed=True, error=True,
+        )
+        assert notifier.update_config(new_cfg) is False
+
+        # enabled 切到 False → 返回 True
+        new_cfg2 = WeComConfig(
+            enabled=False, bot_id="fake_bot_id", secret="fake_secret",
+            chatid="", layer3=True, progress50=True, completed=True, error=True,
+        )
+        assert notifier.update_config(new_cfg2) is True
+        assert notifier._cfg.enabled is False
+
+        # enabled 切回 True → 返回 True
+        new_cfg3 = WeComConfig(
+            enabled=True, bot_id="fake_bot_id", secret="fake_secret",
+            chatid="", layer3=True, progress50=True, completed=True, error=True,
+        )
+        assert notifier.update_config(new_cfg3) is True
+        assert notifier._cfg.enabled is True
+
+        # 再次未变 → 返回 False
+        assert notifier.update_config(new_cfg3) is False
+
+    async def test_tc_notify_54_wecom_master_switch_toggle_allow_queue(self):
+        """TC-NOTIFY-54: 关闭 → 开启后，事件可重新入队（验证状态可逆）"""
+        from bumbo_stats.config import PrinterConfig
+
+        cfg = _make_wecom_config()
+        cfg.enabled = False
+        printer_cfg = PrinterConfig(serial="S001", name="P1")
+        notifier = WeComNotifier(cfg, [printer_cfg])
+        notifier._queue = asyncio.Queue(maxsize=10)
+        notifier._chatid = "test_chatid"
+
+        status = _make_status("S001", current_layer=3, total_layers=100, progress=3)
+
+        # 关闭时入队被拦截
+        notifier.notify("S001", EVENT_LAYER3, status)
+        assert notifier._queue.qsize() == 0
+
+        # 开启后（update_config 仅改 _cfg，后台任务启停由 reload 协调）
+        new_cfg = WeComConfig(
+            enabled=True, bot_id="fake_bot_id", secret="fake_secret",
+            chatid="test_chatid", layer3=True, progress50=True,
+            completed=True, error=True,
+        )
+        notifier.update_config(new_cfg)
+        notifier.notify("S001", EVENT_LAYER3, status)
+        assert notifier._queue.qsize() == 1
+
     async def test_tc_notify_22_wecom_unknown_printer_ignored(self):
         """TC-NOTIFY-22: 未知的 serial 不入队，不崩溃"""
         from bumbo_stats.config import PrinterConfig

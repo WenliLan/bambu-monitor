@@ -93,6 +93,19 @@
     <div class="tab-panel" id="panel-wecom">
         <form class="settings-form" id="wecom-form">
             <div class="settings-card">
+                <div class="settings-card-title">🔔 总开关</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label" style="margin-top: 8px;">
+                            <input type="checkbox" name="enabled" {% if config.wecom.enabled %}checked{% endif %}>
+                            启用企业微信机器人通知
+                        </label>
+                        <p class="form-hint">⚠️ 关闭后所有打印进度 / 完成 / HMS 错误通知都不会推送，关闭期间也会断开企微长连接（群聊指令失效）。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-card">
                 <div class="settings-card-title">🔑 机器人凭证</div>
                 <div class="form-row">
                     <div class="form-group">
@@ -178,6 +191,10 @@
                     <label class="checkbox-label">
                         <input type="checkbox" name="layer3" {% if config.feishu.layer3 %}checked{% endif %}>
                         🖨️ 打印到第 3 层时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="progress50" {% if config.feishu.progress50 %}checked{% endif %}>
+                        ⏳ 打印进度 50% 时通知
                     </label>
                     <label class="checkbox-label">
                         <input type="checkbox" name="completed" {% if config.feishu.completed %}checked{% endif %}>
@@ -272,6 +289,7 @@ document.getElementById('wecom-form').addEventListener('submit', async e => {
     e.preventDefault();
     const fd = new FormData(e.target);
     await submitForm('/api/settings/wecom', {
+        enabled: fd.has('enabled'),
         bot_id: fd.get('bot_id'),
         secret: fd.get('secret'),
         chatid: fd.get('chatid'),
@@ -292,6 +310,7 @@ document.getElementById('feishu-form').addEventListener('submit', async e => {
         chatid: fd.get('chatid'),
         enabled: fd.has('enabled'),
         layer3: fd.has('layer3'),
+        progress50: fd.has('progress50'),
         completed: fd.has('completed'),
         error: fd.has('error'),
     });

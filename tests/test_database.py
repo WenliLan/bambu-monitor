@@ -459,3 +459,128 @@ class TestSnapshot:
         assert row is not None
         # 22:00 到 午夜 = 2小时
         assert row["total_print_seconds"] == 7200
+
+
+@pytest.mark.asyncio
+class TestHeartbeat:
+    """心跳机制：停机后重启结算孤儿 session 用上次心跳时刻封顶"""
+
+    async def test_tc_db_27_heartbeat_roundtrip(self, db):
+        """TC-DB-27: 心跳写入后可读回，误差在秒级"""
+        await db.update_heartbeat()
+        hb = await db.get_last_heartbeat()
+        assert hb is not None
+        assert abs((datetime.now() - hb).total_seconds()) < 5
+
+    async def test_tc_db_28_heartbeat_none_when_unset(self, db):
+        """TC-DB-28: 从未写入心跳时返回 None"""
+        assert await db.get_last_heartbeat() is None
+
+    async def test_tc_db_28b_heartbeat_update_overwrites(self, db):
+        """TC-DB-28b: 重复写心跳覆盖旧值（不产生多行）"""
+        await db.update_heartbeat()
+        await db.update_heartbeat()
+        async with aiosqlite.connect(db.db_path) as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM meta WHERE key='last_active'"
+            ) as cursor:
+                (count,) = await cursor.fetchone()
+        assert count == 1
+
+    async def test_tc_db_29_end_with_explicit_end_time(self, db):
+        """TC-DB-29: record_print_end 指定结算时刻，时长算到该时刻而非 now"""
+        serial = "S001"
+        await db.upsert_printer(serial, "Printer", "1.2.3.4")
+        start = datetime.now() - timedelta(hours=2)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
+                VALUES (?, ?, ?, 'running')
+            """, (serial, "job.gcode", start.isoformat()))
+            await conn.commit()
+
+        # 结算到开始后 1 小时（而非当前时间 2 小时后）
+        settle = start + timedelta(hours=1)
+        await db.record_print_end(serial, "completed", end_time=settle)
+
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM print_sessions WHERE printer_serial=?", (serial,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        assert row["status"] == "completed"
+        assert row["duration_seconds"] == 3600
+        assert row["end_time"] == settle.isoformat()
+
+    async def test_tc_db_30_end_time_before_start_capped_zero(self, db):
+        """TC-DB-30: 结算时刻早于开始时刻（异常数据）时长封顶为 0"""
+        serial = "S001"
+        await db.upsert_printer(serial, "Printer", "1.2.3.4")
+        start = datetime.now()
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
+                VALUES (?, ?, ?, 'running')
+            """, (serial, "job.gcode", start.isoformat()))
+            await conn.commit()
+
+        await db.record_print_end(serial, "completed", end_time=start - timedelta(hours=1))
+
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM print_sessions WHERE printer_serial=?", (serial,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        assert row["status"] == "completed"
+        assert row["duration_seconds"] == 0
+
+    async def test_tc_db_31_start_settle_time_with_old_session(self, db):
+        """TC-DB-31: 有遗留任务时，旧任务结算到心跳、新任务从心跳起算"""
+        serial = "S001"
+        await db.upsert_printer(serial, "Printer", "1.2.3.4")
+        old_start = datetime.now() - timedelta(hours=10)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
+                VALUES (?, ?, ?, 'running')
+            """, (serial, "old_job.gcode", old_start.isoformat()))
+            await conn.commit()
+
+        # 心跳在开始后 8 小时（停机时刻），现在距开始已 10 小时
+        heartbeat = old_start + timedelta(hours=8)
+        await db.record_print_start(serial, "new_job.gcode", settle_time=heartbeat)
+
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM print_sessions WHERE printer_serial=? ORDER BY id",
+                (serial,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        # 旧任务结算到心跳：8 小时
+        assert rows[0]["status"] == "completed"
+        assert rows[0]["duration_seconds"] == 8 * 3600
+        assert rows[0]["end_time"] == heartbeat.isoformat()
+        # 新任务从心跳起算（停机期视为持续打印，总时长不丢）
+        assert rows[1]["status"] == "running"
+        assert rows[1]["start_time"] == heartbeat.isoformat()
+
+    async def test_tc_db_32_start_settle_time_without_old_session(self, db):
+        """TC-DB-32: 无遗留任务时，即使提供心跳也从当前时间起算（不臆造）"""
+        serial = "S001"
+        await db.upsert_printer(serial, "Printer", "1.2.3.4")
+        heartbeat = datetime.now() - timedelta(hours=5)
+        before = datetime.now()
+        await db.record_print_start(serial, "new_job.gcode", settle_time=heartbeat)
+
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM print_sessions WHERE printer_serial=?", (serial,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        assert row["status"] == "running"
+        start_time = datetime.fromisoformat(row["start_time"])
+        assert start_time >= before - timedelta(seconds=1)

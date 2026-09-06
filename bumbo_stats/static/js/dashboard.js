@@ -20,6 +20,8 @@ function initWebSocket() {
             const msg = JSON.parse(event.data);
             if (msg.type === 'status_batch') {
                 updateAllPrinters(msg.data);
+            } else if (msg.type === 'ai_alarm') {
+                showAiAlarm(msg);
             }
         } catch (e) { /* ignore parse errors */ }
     };
@@ -137,3 +139,149 @@ function getUtilBarColor(pct) {
 
 // 定时刷新今日产能（每30秒）
 setInterval(loadTodayUsage, 30000);
+
+/* ===== AI 异常报警横幅 ===== */
+
+function showAiAlarm(msg) {
+    const container = document.getElementById('ai-alarm-container');
+    if (!container) return;
+
+    const alarm = document.createElement('div');
+    alarm.className = 'ai-alarm-banner';
+    alarm.innerHTML = `
+        <span class="ai-alarm-icon">🚨</span>
+        <span class="ai-alarm-text">
+            <strong>AI 异常报警</strong> — ${msg.printer_name}
+            | 异常概率 ${(msg.probability * 100).toFixed(1)}%
+            | ${msg.time}
+        </span>
+        <button class="ai-alarm-close" onclick="this.parentElement.remove()">&times;</button>
+    `;
+    container.appendChild(alarm);
+
+    // 10 秒后自动消失
+    setTimeout(() => {
+        if (alarm.parentElement) alarm.remove();
+    }, 10000);
+}
+
+/* ===== AI 异常检测弹窗 ===== */
+
+async function detectAllPrinters() {
+    const btn = document.getElementById('ai-detect-all-btn');
+    if (!btn || btn.disabled) return;
+
+    // 从 DOM 获取序列号和名称
+    const printers = [];
+    document.querySelectorAll('.camera-card').forEach(card => {
+        const resultEl = card.querySelector('.ai-result');
+        const nameEl = card.querySelector('.camera-name');
+        if (resultEl && nameEl) {
+            const serial = resultEl.id.replace('ai-result-', '');
+            if (serial) printers.push({ serial, name: nameEl.textContent });
+        }
+    });
+
+    if (printers.length === 0) {
+        console.warn('detectAllPrinters: 未找到打印机');
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '检测中...';
+
+    // 创建弹窗
+    const overlay = document.createElement('div');
+    overlay.id = 'ai-modal-overlay';
+    overlay.onclick = function(e) {
+        if (e.target === overlay) closeAiModal();
+    };
+    overlay.innerHTML = `
+        <div class="ai-modal" id="ai-modal">
+            <div class="ai-modal-header">
+                <span class="ai-modal-title">AI 异常检测</span>
+                <button class="ai-modal-close" onclick="closeAiModal()">&times;</button>
+            </div>
+            <div class="ai-modal-body">
+                <div class="ai-progress-bar">
+                    <div class="ai-progress-fill" id="ai-progress-fill" style="width: 0%"></div>
+                </div>
+                <div class="ai-progress-text" id="ai-progress-text">准备中...</div>
+                <div class="ai-results" id="ai-results"></div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const progressFill = document.getElementById('ai-progress-fill');
+    const progressText = document.getElementById('ai-progress-text');
+    const resultsEl = document.getElementById('ai-results');
+
+    // 逐个请求（显示进度）
+    for (let i = 0; i < printers.length; i++) {
+        const { serial, name } = printers[i];
+        const pct = Math.round((i / printers.length) * 100);
+        progressFill.style.width = `${pct}%`;
+        progressText.textContent = `检测中 (${i + 1}/${printers.length}): ${name}`;
+
+        let result, error;
+        try {
+            const resp = await fetch(`/api/ai/detect/${serial}`, { method: 'POST' });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+                error = err.detail || resp.statusText;
+            } else {
+                result = await resp.json();
+            }
+        } catch (e) {
+            error = e.message;
+        }
+
+        // 添加结果行
+        const row = document.createElement('div');
+        if (error) {
+            row.className = 'ai-result-row error';
+            row.innerHTML = `
+                <span class="ai-result-icon">⚠️</span>
+                <span class="ai-result-name">${name}</span>
+                <span class="ai-result-detail">${error}</span>
+            `;
+        } else {
+            const isAlarm = result.anomaly;
+            const prob = (result.probability * 100).toFixed(1);
+            const threshold = (result.threshold * 100).toFixed(0);
+            const ms = result.ms.toFixed(0);
+            const state = result.printer_state || '--';
+            const imgSrc = result.image ? `data:image/jpeg;base64,${result.image}` : '';
+            
+            row.className = `ai-result-row ${isAlarm ? 'alarm' : 'ok'}`;
+            row.innerHTML = `
+                <div class="ai-result-content">
+                    <div class="ai-result-info">
+                        <span class="ai-result-icon">${isAlarm ? '🔴' : '🟢'}</span>
+                        <span class="ai-result-name">${name}</span>
+                        <span class="ai-result-state">${state}</span>
+                        <span class="ai-result-detail">
+                            ${isAlarm ? '异常' : '正常'} P=${prob}%
+                            <span class="ai-result-meta">(阈值=${threshold}%, ${ms}ms)</span>
+                        </span>
+                    </div>
+                    ${imgSrc ? `<div class="ai-result-image"><img src="${imgSrc}" alt="${name}"></div>` : ''}
+                </div>
+            `;
+        }
+        resultsEl.appendChild(row);
+    }
+
+    // 完成
+    progressFill.style.width = '100%';
+    progressText.textContent = '检测完成';
+
+    btn.disabled = false;
+    btn.textContent = '调用异常检测';
+}
+
+function closeAiModal() {
+    const overlay = document.getElementById('ai-modal-overlay');
+    if (overlay) overlay.remove();
+}

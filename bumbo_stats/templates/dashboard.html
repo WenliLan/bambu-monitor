@@ -5,7 +5,12 @@
 {% block content %}
 <!-- 摄像头区域 -->
 <section class="section">
-    <h2 class="section-title">📷 实时监控</h2>
+    <h2 class="section-title">
+        📷 实时监控
+        <button class="ai-detect-all-btn" id="ai-detect-all-btn" onclick="detectAllPrinters()" title="对所有打印机执行 AI 异常检测">
+            调用异常检测
+        </button>
+    </h2>
     <div class="camera-grid" id="camera-grid">
         {% for printer in printers %}
         <div class="camera-card">
@@ -24,6 +29,7 @@
                     <span class="camera-state" id="state-badge-{{ printer.serial }}">OFFLINE</span>
                 </div>
             </div>
+            <div class="ai-result" id="ai-result-{{ printer.serial }}"></div>
         </div>
         {% endfor %}
     </div>
