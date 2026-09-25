@@ -19,10 +19,27 @@ class PrinterState(str, Enum):
 
 
 class HMSError(BaseModel):
-    """HMS 健康监控错误"""
-    code: int = 0          # 错误码，如 0x0B01（堵嘴）
-    severity: str = ""    # "error" 或 "warning"
-    message: str = ""     # 友好描述
+    """HMS 健康监控错误
+
+    Bambu 实际 MQTT 字段 (hms[] 数组每条 entry) 结构:
+      attr  : 32 bit, [Module ID 8][Module No 8][Part ID 8][Part No 8]
+              例如 0x03000200 = module 03(MC) part 02(右挤出机喷嘴)
+              用于在 HMS_ERROR_CODES 注册表中查找中文描述
+      code  : 32 bit, [Alert level 16][Error code ID 16]
+              高 16 位是告警严重级别:
+                0x0001 = fatal   (Error 红, 任务停止, 报警前消除)
+                0x0002 = serious (Warning 黄, 任务暂停, 恢复前消除)
+                0x0003 = common  (Notification 蓝, 仅提示)
+              低 16 位是错误码 ID (Bambu Wiki 0xCCCC 4 位)
+    历史字段含义 (修复前, 已废弃):
+      code    : 原意为 8 位 hex 错误码, 实际写入了 attr 值
+      severity: 原意为 "error"/"warning" 字符串, 实际一直为空
+    """
+    code: int = 0          # 错误码 (现指 attr 字段, 用于 lookup_hms_error)
+    severity: str = ""     # "fatal" / "serious" / "common" / "error" / "warning"
+    message: str = ""      # 原始 MQTT 描述 (兼容 err_msg / msg 字段)
+    attr: int = 0          # 原始 attr 字段 (4 byte, module+part 定位)
+    raw_code: int = 0      # 原始 code 字段 (4 byte, alert level 高 16 + error id 低 16)
 
 # ---------------------------------------------------------------------------
 # HMS 错误码注册表（来源：Bambu Lab Wiki，131 个官方错误码）

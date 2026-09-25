@@ -57,6 +57,76 @@ body {
 .ws-connected { background: var(--green); box-shadow: 0 0 6px var(--green); }
 .ws-disconnected { background: var(--red); }
 
+/* ===== 连接中遮罩 ===== */
+/* WebSocket 未连接成功时，dashboard.js 给 <body> 加 .ws-connecting：
+   - 显示覆盖全屏的半透明遮罩 + 居中大提示框（突出“暂未连接”）
+   - 虚化并禁用主内容交互，避免用户误以为已拿到实时数据
+   z-index 低于 .navbar(100)，保证导航栏仍清晰可点（可切换到设置页）。 */
+.connect-overlay {
+    position: fixed;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: rgba(15, 17, 23, 0.55);
+    z-index: 90;
+    animation: fadeIn 0.2s ease;
+}
+
+body.ws-connecting .connect-overlay {
+    display: flex;
+}
+
+body.ws-connecting main.container {
+    filter: blur(6px) saturate(0.85);
+    pointer-events: none;
+    user-select: none;
+}
+
+.connect-dialog {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px 48px;
+    max-width: 440px;
+    text-align: center;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+    animation: slideUp 0.3s ease;
+}
+
+.connect-spinner {
+    width: 46px;
+    height: 46px;
+    margin: 0 auto 20px;
+    border: 4px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: connectSpin 0.9s linear infinite;
+}
+
+@keyframes connectSpin {
+    to { transform: rotate(360deg); }
+}
+
+.connect-title {
+    font-size: 1.35rem;
+    font-weight: 700;
+    margin-bottom: 12px;
+    color: var(--text);
+}
+
+.connect-desc {
+    font-size: 0.95rem;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.connect-hint {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+}
+
 /* ===== 容器 ===== */
 .container {
     max-width: 1400px;
@@ -87,6 +157,31 @@ body {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 16px;
+    position: relative;  /* 作为 .drag-placeholder 绝对定位的参照容器 */
+    /* 默认隐藏：避免浏览器在 sortable.js 加载之前以 CSS Grid auto-flow
+       投机 paint 出“紧凑排列”（即使后续 JS 已设 inline grid-row/col，
+       paint 已发生过，用户仍会看到一闪而过的紧凑布局）。
+       sortable.js 的 applySavedOrder 在设置完每张 camera-card 的
+       gridRow/gridColumn 后会给本元素加 .layout-ready 类，使可见。 */
+    visibility: hidden;
+}
+
+.camera-grid.layout-ready {
+    visibility: visible;
+}
+
+/* 拖拽中显示的占位指示符：占据鼠标所在网格单元（不参与 grid flow），
+   用 position: absolute 避免撑开其他卡片；尺寸在 dragover 时根据实际
+   网格列宽/行高动态计算 */
+.drag-placeholder {
+    position: absolute;
+    background: rgba(79, 140, 255, 0.18);
+    border: 2px dashed var(--accent);
+    border-radius: var(--radius);
+    pointer-events: none;
+    z-index: 5;
+    display: none;
+    transition: left 0.12s ease, top 0.12s ease;
 }
 
 .camera-card {
@@ -94,6 +189,34 @@ body {
     border-radius: var(--radius);
     overflow: hidden;
     border: 1px solid var(--border);
+    position: relative;
+}
+
+/* 拖拽提示：右上角“⋮⋮”把手 */
+.camera-handle {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+    letter-spacing: -1px;
+    opacity: 0.5;
+    pointer-events: none;
+    user-select: none;
+}
+.camera-card:hover .camera-handle { opacity: 0.9; }
+
+/* 可拖拽状态光标与拖拽中/放置占位的视觉反馈 */
+.camera-card[draggable="true"] { cursor: grab; }
+.camera-card[draggable="true"]:active { cursor: grabbing; }
+.camera-card.dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+    border-style: dashed;
+}
+.camera-card.drag-over {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(79, 140, 255, 0.4);
 }
 
 .camera-header {
@@ -126,12 +249,21 @@ body {
 }
 
 .camera-state {
+    /* 兜底深色背景：未匹配到任何 .badge-* 状态类时仍可读 */
     background: rgba(0,0,0,0.7);
     padding: 2px 8px;
     border-radius: 4px;
     font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.5px;
+}
+
+/* 与“打印机状态”卡片统一颜色族：摄像头角标也跟随状态切换颜色。
+   .camera-state.state-badge 的特异性 (0,2,0) 高于单独的 .state-badge (0,1,0)，
+   可覆盖后者更宽松的内边距与胶囊圆角，保持摄像头角标的紧凑外观。 */
+.camera-state.state-badge {
+    padding: 2px 8px;
+    border-radius: 4px;
 }
 
 /* ===== 打印机状态卡片 ===== */

@@ -4,6 +4,9 @@ let ws = null;
 let wsReconnectTimer = null;
 
 function initWebSocket() {
+    // 发起连接前先进入“连接中”态：显示遮罩 + 虚化内容，避免用户把尚未
+    // 同步的旧数据误认为已连接（首屏与每次重连都会经过这里）。
+    setWsStatus(false);
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
@@ -41,6 +44,9 @@ function setWsStatus(connected) {
     const text = document.getElementById('ws-text');
     dot.className = `ws-dot ${connected ? 'ws-connected' : 'ws-disconnected'}`;
     text.textContent = connected ? '已连接' : '连接中...';
+    // 未连接成功时给 <body> 加 .ws-connecting：CSS 据此显示居中提示框并虚化
+    // 主内容，突出“暂未连接成功”；连接成功后移除，恢复正常。
+    document.body.classList.toggle('ws-connecting', !connected);
 }
 
 /* ===== 状态更新 ===== */
@@ -53,14 +59,14 @@ function updateAllPrinters(data) {
 }
 
 function updatePrinterCard(serial, s) {
-    // 状态徽章
+    // 状态徽章（打印机状态卡片右上角）
     const badge = document.getElementById(`badge-${serial}`);
-    const cameraBadge = document.getElementById(`state-badge-${serial}`);
     if (badge) {
         badge.className = `state-badge badge-${s.state.toLowerCase()}`;
         badge.textContent = s.state;
     }
-    if (cameraBadge) cameraBadge.textContent = s.state;
+    // 摄像头角标同样跟随状态变色（复用同一套颜色族）
+    updateCameraBadge(serial, s.state);
 
     // 进度
     const prog = document.getElementById(`progress-${serial}`);
@@ -99,7 +105,11 @@ function updatePrinterCard(serial, s) {
 
 function updateCameraBadge(serial, state) {
     const el = document.getElementById(`state-badge-${serial}`);
-    if (el) el.textContent = state;
+    if (!el) return;
+    // 与“打印机状态”卡片共用颜色族：camera-state 保留角标外观，
+    // state-badge + badge-{state小写} 提供状态对应的背景/文字色。
+    el.className = `camera-state state-badge badge-${state.toLowerCase()}`;
+    el.textContent = state;
 }
 
 function setText(id, text) {

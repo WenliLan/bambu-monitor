@@ -146,23 +146,36 @@ class PrintMonitor:
             # 初始化 gcode 追踪
             self._last_gcode[serial] = gcode
             self._notify_job_gcode[serial] = gcode
-            # 运行中任务一律标记已发（历史事件不补发）：
+            # 运行中任务一律标记 layer3/progress50 已发（历史事件不补发）：
             # 启动时 MQTT 数据可能不完整（打印中却报 layer=0/0），
-            # 若据此设为 False，后续首条完整消息会在中途层数误发通知
+            # 若据此设为 False，后续首条完整消息会在中途层数误发通知。
+            # 仅在 monitor 层做 layer3/progress50 任务级去重；wecom/feishu 的
+            # layer3_sent/progress50_sent 同样设为 True，与 monitor 同步。
+            #
+            # completed 标记保持 False：
+            # 1. 状态变更去重不依靠 completed_sent（99% 路径和 FINISH 路径都有机会
+            #    触发，依赖 wecom/feishu 的 completed_sent 在其中一个路径设 True 后
+            #    让另一条路径跳过）。
+            # 2. 历史 bug：早期版本同时把 wecom/feishu 的 completed_sent 也设了 True，
+            #    导致服务重启后即使打印机走完 RUNNING→FINISH 状态变更，feishu.notify
+            #    的去重检查 (state.completed_sent or not cfg.completed) 会跳过入队，
+            #    飞书永远收不到完成通知。
+            # 3. 99% 路径本身靠 monitor._completed_notified 去重（重启后首次 99% 会
+            #    触发一次，用户可接受；后续 FINISH 路径靠 _completed_notified 屏障
+            #    跳过避免重复）。
             self._layer3_notified[serial] = True
             self._progress50_notified[serial] = True
-            self._completed_notified[serial] = True
-            # 同步更新通知模块的状态，防止 gcode 变化误判
+            # _completed_notified 不设（保持 False），让后续 99% / FINISH 路径
+            # 能正常发出完成通知；去重交给 monitor._completed_notified 屏障
+            # （在 99% 路径 line 299 / FINISH 路径处设 True）。
             if self.wecom_notifier and serial in self.wecom_notifier._states:
                 self.wecom_notifier._states[serial].last_gcode = gcode
                 self.wecom_notifier._states[serial].layer3_sent = True
                 self.wecom_notifier._states[serial].progress50_sent = True
-                self.wecom_notifier._states[serial].completed_sent = True
             if self.feishu_notifier and serial in self.feishu_notifier._states:
                 self.feishu_notifier._states[serial].last_gcode = gcode
                 self.feishu_notifier._states[serial].layer3_sent = True
                 self.feishu_notifier._states[serial].progress50_sent = True
-                self.feishu_notifier._states[serial].completed_sent = True
             logger.info(
                 "[启动扫描] 初始化 %s: layer=%d/%d progress=%d%% gcode=%s (运行中任务不补发通知)",
                 serial, status.current_layer, status.total_layers,
@@ -213,14 +226,28 @@ class PrintMonitor:
             return
 
         # HMS 错误检测（任何状态都可能发生，与 RUNNING 独立）
+        # 仅“严重级别”触发通知:
+        #   fatal / serious  <- Bambu MQTT code>>16 = 1 / 2 (Error红 / Warning黄)
+        #   error            <- 历史数据 / 手工生成
+        # 以下级别仅提示，不走告警:
+        #   common / warning  <- Bambu code>>16=3 (蓝，仅提示) / 历史数据
         if status.hms_errors:
-            error_events = [e for e in status.hms_errors if e.severity == "error"]
+            notify_levels = ("fatal", "serious", "error")
+            error_events = [e for e in status.hms_errors if e.severity in notify_levels]
+            skipped = [e for e in status.hms_errors if e.severity not in notify_levels]
+            if skipped:
+                # 诊断: 出现被跳过的 severity 时打印，便于排查是否误判
+                logger.debug(
+                    "HMS 错误已跳过（仅提示级别）: %s skipped=%s",
+                    serial,
+                    [(hex(e.code), e.severity, e.message) for e in skipped],
+                )
             if error_events:
                 gcode = status.gcode_file or ""
                 logger.info(
                     "触发HMS错误通知: %s errors=%s file=%s",
                     serial,
-                    [(e.code, e.message) for e in error_events],
+                    [(hex(e.code), e.severity, e.message) for e in error_events],
                     gcode,
                 )
                 self._notify_all(serial, "error", status, errors=error_events)
@@ -366,6 +393,8 @@ class PrintMonitor:
                     fst = self.feishu_notifier._states[serial]
                     fst.last_gcode = curr_gcode
                     fst.layer3_sent = False
+                    fst.progress50_sent = False  # 修复:重打同名文件时必须重置,
+                                                  # 否则 feishu.notify 会以“已发送”跳过
                     fst.completed_sent = False
                     fst.last_error_snapshot = ""
 
@@ -382,12 +411,26 @@ class PrintMonitor:
             ) else "failed"
             await self.db.record_print_end(serial, end_status)
             # 触发 completed 通知（_check_progress_events 在 FINISH 时不会进入）
+            # 双重去重：monitor._completed_notified 作为任务级屏障，避免 99% 路径
+            # 和 FINISH 路径同时入队；wecom/feishu.completed_sent 重置后再入队，
+            # 保证即俊启动扫描遗留了 True 状态也能正常发出通知。
+            # 历史 bug：之前只重置 monitor 标记，不重置 wecom/feishu 标记；
+            # 如果启动扫描后没有任何 gcode 变化 / RUNNING 分支被触发（即打印机
+            # 连续完成打印但状态机代码路径未重置去重标记），feishu.notify 的
+            # 去重检查会跳过入队，完成通知丢失。
             if (self.wecom_notifier or self.feishu_notifier) and curr_state == PrinterState.FINISH:
-                logger.info(
-                    "触发完成通知: %s file=%s",
-                    serial, status.gcode_file,
-                )
-                self._notify_all(serial, "completed", status)
+                if not self._completed_notified.get(serial, False):
+                    self._completed_notified[serial] = True
+                    # 显式重置 wecom/feishu 的完成标记，防止任何残留 True 状态
+                    if self.wecom_notifier and serial in self.wecom_notifier._states:
+                        self.wecom_notifier._states[serial].completed_sent = False
+                    if self.feishu_notifier and serial in self.feishu_notifier._states:
+                        self.feishu_notifier._states[serial].completed_sent = False
+                    logger.info(
+                        "触发完成通知: %s file=%s",
+                        serial, status.gcode_file,
+                    )
+                    self._notify_all(serial, "completed", status)
 
         self._last_states[serial] = curr_state
         self._last_gcode[serial] = status.gcode_file

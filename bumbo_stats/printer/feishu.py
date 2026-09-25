@@ -967,10 +967,19 @@ class FeishuNotifier:
             lines.append("｜".join(extras))
         lines.append(now)
 
-        # ---- 错误详情（HMS）: 中文名 + 类目 + 建议 + 原始 + 码 ----
+        # ---- 错误详情（HMS）: 中文名 + 类目 + 建议 + 原始 + 8 位码 + 短码 + 级别 ----
+        # Bambu 实际数据:
+        #   err.code    = attr (4 byte, 用于查 HMS_ERROR_CODES 注册表)
+        #   err.attr    = attr 原始字段 (冗余存一份便于渲染)
+        #   err.raw_code= code 原始字段 (高 16 alert level + 低 16 error id)
+        #   err.severity= "fatal" / "serious" / "common" / "error" / "warning"
         if event == EVENT_ERROR and errors:
             lines.append("")
             from ..models import lookup_hms_error
+            severity_emoji = {
+                "fatal": "🔴", "serious": "🟡", "common": "🔵",
+                "error": "🔴", "warning": "🟡",
+            }
             for err in errors:
                 info = lookup_hms_error(err.code)
                 cat = info.get("category", "未知")
@@ -979,11 +988,16 @@ class FeishuNotifier:
                     info.get("cn", err.message)
                     if err.message else info.get("cn", "未知错误")
                 )
+                sev = (err.severity or "").strip().lower()
+                sev_tag = f"{severity_emoji.get(sev, '⚪')}{sev or '未知'}"
+                # 短码: attr 高 16 + raw_code 低 16, 形如 0300_0200
+                short_code = f"{(err.attr >> 16) & 0xFFFF:04X}_{err.raw_code & 0xFFFF:04X}"
                 lines.append(f"• {name} ({cat})")
                 if suggestion:
                     lines.append(f"  建议: {suggestion}")
                 lines.append(
                     f"  原始: {err.message or '(无)'} | 码: 0x{err.code:08X}"
+                    f" | 短码: {short_code} | 级别: {sev_tag}"
                 )
 
         return "\n".join(lines)

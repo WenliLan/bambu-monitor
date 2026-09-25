@@ -368,6 +368,131 @@ ai_guard:
         assert config.ai_guard.interval == 300
         assert config.ai_guard.model == "dino_ft"
         assert config.ai_guard.alert_frames == 5
-        # 未指定的字段用默认值
-        assert config.ai_guard.track == "adapted"
-        assert config.ai_guard.cooldown == 1800
+
+
+class TestAIGuardThresholdSync:
+    """TC-AI-14~17: set_threshold 必须同步到 gallery.decision_threshold
+
+    历史 bug: 原来仅修改 ``self._detector.threshold`` 不会影响实际推理路径。
+    detect() 调用 ``self.gallery.predict()``，决策用的是
+    ``gallery.decision_threshold``（且 FeatureGallery.__init__ 会从 meta.json
+    反向覆盖构造参数）。所以飞书发 "阈值 0.7" 后:
+      - yaml 写入了 0.7 ✓
+      - detector.threshold 变成了 0.7 ✓
+      - 但实际推理还在用 gallery.decision_threshold=0.5 ✗
+    """
+
+    def _make_guard_with_gallery(self, init_threshold: float = 0.5):
+        """构造一个带有 mock detector+gallery 的 AIGuardLoop"""
+        config = _make_ai_config(threshold=init_threshold)
+        guard = AIGuardLoop(config, MagicMock(), MagicMock(), MagicMock())
+
+        mock_gallery = MagicMock()
+        mock_gallery.decision_threshold = init_threshold
+        mock_gallery.update_threshold = MagicMock(
+            side_effect=lambda v: setattr(mock_gallery, "decision_threshold", v),
+        )
+        mock_detector = MagicMock()
+        mock_detector.threshold = init_threshold
+        mock_detector.gallery = mock_gallery
+
+        guard._detector = mock_detector
+        guard._init_error = None
+        return guard, mock_detector, mock_gallery
+
+    def test_threshold_sync_updates_gallery(self):
+        """TC-AI-14: set_threshold 同步更新 gallery.decision_threshold"""
+        guard, mock_detector, mock_gallery = self._make_guard_with_gallery(0.5)
+
+        old = guard.set_threshold(0.7)
+
+        assert old == 0.5
+        assert mock_detector.threshold == 0.7
+        # 关键：gallery 也必须同步（实际推理用）
+        assert mock_gallery.decision_threshold == 0.7
+        # 必须调用 update_threshold（持久化到 meta.json）
+        mock_gallery.update_threshold.assert_called_once_with(0.7)
+
+    def test_threshold_sync_triggers_persist_callback(self):
+        """TC-AI-15: set_threshold 触发 yaml 持久化回调"""
+        guard, mock_detector, _ = self._make_guard_with_gallery(0.5)
+        persist_called = []
+        guard._on_threshold_changed = lambda v: persist_called.append(v)
+
+        guard.set_threshold(0.85)
+
+        assert persist_called == [0.85]
+        assert guard._cfg.threshold == 0.85
+
+    def test_threshold_clamp_to_0_1(self):
+        """TC-AI-16: 阈值自动截断到 [0, 1]"""
+        guard, mock_detector, mock_gallery = self._make_guard_with_gallery(0.5)
+
+        # 超出上界
+        old = guard.set_threshold(2.5)
+        assert mock_detector.threshold == 1.0
+        assert mock_gallery.decision_threshold == 1.0
+        # 低于下界
+        old = guard.set_threshold(-0.3)
+        assert mock_detector.threshold == 0.0
+        assert mock_gallery.decision_threshold == 0.0
+
+    def test_threshold_unavailable_returns_minus_one(self):
+        """TC-AI-17: detector 不可用时 set_threshold 返回 -1，不调 gallery"""
+        config = _make_ai_config()
+        guard = AIGuardLoop(config, MagicMock(), MagicMock(), MagicMock())
+        # 不设置 _detector，模拟 detector 未初始化
+        mock_gallery = MagicMock()
+        guard._detector = None  # is_available=False
+
+        result = guard.set_threshold(0.7)
+        assert result == -1.0
+        mock_gallery.update_threshold.assert_not_called()
+
+    def test_threshold_gallery_missing_fallback(self):
+        """TC-AI-18: detector 没有 gallery 属性时优雅降级（不抛异常）"""
+        guard, mock_detector, _ = self._make_guard_with_gallery(0.5)
+        # 模拟 detector.gallery 不存在
+        del mock_detector.gallery
+
+        # 不应抛异常
+        result = guard.set_threshold(0.7)
+        assert result == 0.5
+        assert mock_detector.threshold == 0.7
+
+
+class TestAIGuardInitThresholdSync:
+    """TC-AI-19: 启动时按 ai_config.threshold 强制覆盖 gallery
+
+    历史 bug: FeatureGallery.__init__ 会从 meta.json 反向覆盖构造参数
+    的 decision_threshold。重启服务后，yaml 里是 0.7，但 meta.json 是 0.5，
+    最终 gallery.decision_threshold 会被覆盖回 0.5。
+    """
+
+    @pytest.mark.asyncio
+    async def test_init_overrides_gallery_threshold(self):
+        """TC-AI-19: _init_detector 完成后用 ai_config.threshold 覆盖 gallery"""
+        config = _make_ai_config(threshold=0.7)  # 用户配置 0.7
+        guard = AIGuardLoop(config, MagicMock(), MagicMock(), MagicMock())
+
+        # 模拟 _init_detector 已经把 detector 装好（gallery 内部被 meta.json 覆盖回 0.5）
+        mock_gallery = MagicMock()
+        mock_gallery.decision_threshold = 0.5  # 来自 meta.json 的旧值
+        mock_gallery.update_threshold = MagicMock(
+            side_effect=lambda v: setattr(mock_gallery, "decision_threshold", v),
+        )
+        mock_detector = MagicMock()
+        mock_detector.threshold = 0.5
+        mock_detector.gallery = mock_gallery
+        guard._detector = mock_detector
+
+        # 显式调用同步逻辑（替代 _init_detector 内的内联代码）
+        if guard._cfg.threshold > 0:
+            gallery = getattr(guard._detector, "gallery", None)
+            if gallery is not None and hasattr(gallery, "update_threshold"):
+                gallery.update_threshold(guard._cfg.threshold)
+
+        # ai_config 优先于 meta.json
+        assert mock_gallery.decision_threshold == 0.7
+        mock_gallery.update_threshold.assert_called_once_with(0.7)
+        

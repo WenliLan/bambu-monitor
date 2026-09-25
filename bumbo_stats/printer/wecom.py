@@ -909,16 +909,28 @@ class WeComNotifier:
         if event == EVENT_ERROR and errors:
             lines.append("")
             from ..models import lookup_hms_error
+            # 告警级别 emoji: fatal/serious/common 来自 Bambu MQTT code>>16
+            severity_emoji = {
+                "fatal": "🔴", "serious": "🟡", "common": "🔵",
+                "error": "🔴", "warning": "🟡",
+            }
             for err in errors:
                 info = lookup_hms_error(err.code)
                 cat = info.get("category", "未知")
                 suggestion = info.get("suggestion", "")
                 name = info.get("cn", err.message) if err.message else info.get("cn", "未知错误")
+                sev = (err.severity or "").strip().lower()
+                sev_tag = f"{severity_emoji.get(sev, '⚪')}{sev or '未知'}"
+                # 短码: attr 高 16 + raw_code 低 16, 形如 0300_0200
+                short_code = f"{(err.attr >> 16) & 0xFFFF:04X}_{err.raw_code & 0xFFFF:04X}"
                 lines.append(f"- **{name}** ({cat})")
                 if suggestion:
                     lines.append(f"  - 💡 {suggestion}")
                 lines.append(f"  - 📋 原始: {err.message or '(无)'}")
-                lines.append(f"  - 🔢 码: `0x{err.code:08X}`")
+                lines.append(
+                    f"  - 🔢 码: `0x{err.code:08X}`"
+                    f" | 短码 `{short_code}` | 级别 {sev_tag}"
+                )
 
         lines.append("")
         lines.append(f"[打开监控面板](http://192.168.31.177:8000/)")

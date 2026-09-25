@@ -9,6 +9,9 @@
   TC-HMS-06: lookup_hms_error 对所有 131 个 Wiki 码返回完整字段
   TC-HMS-07: 飞书消息正确渲染
   TC-HMS-08: 非 error 事件不渲染错误区域
+  TC-HMS-09: 短码格式 (XXXX_YYYY) + 严重级别 emoji (修复后新增)
+  TC-HMS-10: severity=fatal/serious/common 渲染对应颜色 emoji
+  TC-HMS-11: 未填 attr/raw_code 时不崩溃（默认 0）
 """
 
 import pytest
@@ -122,3 +125,85 @@ class TestHMSErrorMessageFormatting:
             md = WeComNotifier._build_markdown("P1", event, self._make_status(), None)
             assert "💡" not in md
             assert "📋" not in md
+
+
+class TestHMSErrorShortCodeAndSeverity:
+    """TC-HMS-09~11: 修复后新增强制显示的信息
+
+    历史 bug: 原渲染只显示 8 位 hex 错误码，不显示严重级别。
+    修复后: 追加短码 (XXXX_YYYY) + 级别 emoji + 级别名。
+    短码格式: (attr >> 16) & 0xFFFF 拼接 (raw_code & 0xFFFF)
+    """
+
+    def _make_status(self):
+        return type("MockStatus", (), {
+            "gcode_file": "test.gcode",
+            "current_layer": 50,
+            "total_layers": 100,
+            "progress": 50,
+        })()
+
+    def test_tc_hms_09_short_code_and_severity(self):
+        """TC-HMS-09: wecom 渲染包含短码 + 级别"""
+        # attr=0x03000200, raw_code=0x00010200
+        # 短码 = (0x03000200 >> 16) & 0xFFFF = 0x0300
+        #     + "_" + (0x00010200 & 0xFFFF) = 0x0200
+        # 期望: "0300_0200" + severity="fatal" + emoji "🔴"
+        err = HMSError(
+            code=0x03000200, severity="fatal", message="nozzle temp",
+            attr=0x03000200, raw_code=0x00010200,
+        )
+        md = WeComNotifier._build_markdown("P1", EVENT_ERROR, self._make_status(), [err])
+        assert "0300_0200" in md
+        assert "fatal" in md
+        assert "🔴" in md
+        # 保留原有字段
+        assert "右挤出机喷嘴温控异常" in md
+        assert "0x03000200" in md
+
+    def test_tc_hms_10_severity_emoji_mapping(self):
+        """TC-HMS-10: 不同 severity 对应不同 emoji"""
+        cases = [
+            ("fatal", "🔴"),
+            ("serious", "🟡"),
+            ("common", "🔵"),
+            ("error", "🔴"),     # 兼容老数据
+            ("warning", "🟡"),   # 兼容老数据
+        ]
+        for sev, emoji in cases:
+            err = HMSError(
+                code=0x03000200, severity=sev, message="",
+                attr=0x03000200, raw_code=0x00010200,
+            )
+            md = WeComNotifier._build_markdown("P1", EVENT_ERROR, self._make_status(), [err])
+            assert emoji in md, f"severity={sev} 应渲染 {emoji}"
+            assert sev in md
+
+    def test_tc_hms_11_missing_attr_raw_code_no_crash(self):
+        """TC-HMS-11: 未填 attr/raw_code 时不崩溃，短码退化为 0000_XXXX"""
+        # 不传 attr/raw_code，验证默认 0 不导致 KeyError/FormatError
+        err = HMSError(code=0x03000200, severity="error", message="")
+        md = WeComNotifier._build_markdown("P1", EVENT_ERROR, self._make_status(), [err])
+        # 默认 attr=0 raw_code=0 -> 短码 "0000_0000"
+        assert "0000_0000" in md
+        # 原有字段仍在
+        assert "0x03000200" in md
+        assert "右挤出机喷嘴温控异常" in md
+
+    def test_tc_hms_12_feishu_short_code(self):
+        """TC-HMS-12: 飞书渲染同样包含短码 + 级别 emoji"""
+        err = HMSError(
+            code=0x07FE2000, severity="serious", message="filament empty",
+            attr=0x07FE2000, raw_code=0x00020300,
+        )
+        msg = FeishuNotifier._build_message("P1", EVENT_ERROR, self._make_status(), [err])
+        # 短码: (0x07FE2000 >> 16) = 0x07FE, (0x00020300 & 0xFFFF) = 0x0300
+        assert "07FE_0300" in msg
+        # 严重级别
+        assert "serious" in msg
+        assert "🟡" in msg
+        # 原有字段
+        assert "0x07FE2000" in msg
+        assert "左/右挤出机外部挂载的耗材用完" in msg
+        assert "AMS" in msg
+        assert "原始: filament empty" in msg

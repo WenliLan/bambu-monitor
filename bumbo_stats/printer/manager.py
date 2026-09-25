@@ -324,16 +324,39 @@ class PrinterManager:
                     break
 
         # 解析 HMS 错误
+        # Bambu MQTT `hms[]` 每条 entry 实际字段: attr (4 byte, module+part) + code (4 byte, alert level 高 16 + error id 低 16)
+        # 兼容老字段 (err_code / severity / err_msg), 便于回放历史 push
         hms_raw = print_data.get("hms", [])
         hms_errors = []
         if hms_raw and isinstance(hms_raw, list):
             for hms_item in hms_raw:
-                if isinstance(hms_item, dict):
-                    hms_errors.append(HMSError(
-                        code=hms_item.get("err_code", 0),
-                        severity=hms_item.get("severity", ""),
-                        message=hms_item.get("err_msg", ""),
-                    ))
+                if not isinstance(hms_item, dict):
+                    continue
+                attr_raw = int(hms_item.get("attr", 0) or 0)
+                code_raw = int(hms_item.get("code", 0) or 0)
+                # code 高 16 位 = alert level: 1=fatal / 2=serious / 3=common
+                level = (code_raw >> 16) & 0xFFFF
+                severity = {1: "fatal", 2: "serious", 3: "common"}.get(level, "")
+                # 兼容老字段 (历史 push 里可能直接带 severity 字符串)
+                if not severity:
+                    legacy_sev = str(hms_item.get("severity", "") or "").strip().lower()
+                    if legacy_sev in ("fatal", "serious", "common", "error", "warning"):
+                        severity = legacy_sev
+                # 兼容老字段 err_code (原意为 8 位 hex, 与 attr 等价)
+                if attr_raw == 0 and "err_code" in hms_item:
+                    attr_raw = int(hms_item.get("err_code", 0) or 0)
+                message = str(
+                    hms_item.get("msg", "")
+                    or hms_item.get("err_msg", "")
+                    or ""
+                )
+                hms_errors.append(HMSError(
+                    code=attr_raw,        # attr 用于在 HMS_ERROR_CODES 注册表查中文描述
+                    severity=severity,    # fatal/serious/common/error/warning
+                    message=message,
+                    attr=attr_raw,
+                    raw_code=code_raw,
+                ))
 
         # 解析 AMS 耗材状态
         ams_status = dict(ams_data) if ams_data else None

@@ -111,7 +111,16 @@ class AIGuardLoop:
         return self._detector.threshold if self._detector else None
 
     def set_threshold(self, value: float) -> float:
-        """动态修改检测阈值（并持久化到 yaml 配置）
+        """动态修改检测阈值（并持久化到 yaml + meta.json）
+
+        关键修复：原来只更新 ``self._detector.threshold``，但 detect()
+        实际读取的是 ``self._detector.gallery.decision_threshold``
+        （且 FeatureGallery.__init__ 会从 meta.json 反向覆盖构造参数）。
+        这里必须同时：
+          1) 改 detector.threshold（供 to_dict() / API 查询返回最新值）
+          2) 调 gallery.update_threshold()（实际推理用 + 持久化 meta.json）
+          3) 同步 ai_config.threshold（避免热重载时拿到旧值）
+          4) 触发 on_threshold_changed 回调（写 yaml）
 
         Args:
             value: 新阈值（0.0 ~ 1.0），超出范围会被截断
@@ -124,6 +133,13 @@ class AIGuardLoop:
         old = self._detector.threshold
         clamped = max(0.0, min(1.0, float(value)))
         self._detector.threshold = clamped
+        # 关键：同步到 gallery 的 decision_threshold，否则 detect() 用的还是旧值
+        gallery = getattr(self._detector, "gallery", None)
+        if gallery is not None and hasattr(gallery, "update_threshold"):
+            try:
+                gallery.update_threshold(clamped)
+            except Exception as e:
+                logger.error("同步 gallery decision_threshold 失败（detector.threshold 已更新）: %s", e)
         # 同步更新内存中的 ai_config，避免热重载 / API 读取时拿到旧值
         self._cfg.threshold = clamped
         # 触发持久化回调（app.py 注入，将 config 写回 printers.yaml）
@@ -183,6 +199,22 @@ class AIGuardLoop:
             )
 
         self._detector = await asyncio.to_thread(_load)
+
+        # 关键修复：FeatureGallery.__init__ 会从 meta.json 反向覆盖构造参数
+        # 的 decision_threshold，导致 detector 实际推理用的还是 meta.json 里的旧值。
+        # 这里强制以 ai_config.threshold 为准（用户已显式配置时优先），并写回
+        # meta.json 让重启后保持一致。
+        if self._cfg.threshold > 0:
+            gallery = getattr(self._detector, "gallery", None)
+            if gallery is not None and hasattr(gallery, "update_threshold"):
+                try:
+                    gallery.update_threshold(self._cfg.threshold)
+                    logger.info(
+                        "启动时同步 gallery.decision_threshold=%.2f（ai_config 优先于 meta.json）",
+                        self._cfg.threshold,
+                    )
+                except Exception as e:
+                    logger.warning("启动同步 gallery threshold 失败: %s", e)
 
     async def _loop(self):
         """主循环：每隔 interval 秒执行一次检测"""

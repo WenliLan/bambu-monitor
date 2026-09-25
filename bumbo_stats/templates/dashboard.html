@@ -13,7 +13,8 @@
     </h2>
     <div class="camera-grid" id="camera-grid">
         {% for printer in printers %}
-        <div class="camera-card">
+        <div class="camera-card" draggable="true" data-serial="{{ printer.serial }}">
+            <div class="camera-handle" title="拖动重新排序">⋮⋮</div>
             <div class="camera-header">
                 <span class="camera-name">{{ printer.name }}</span>
                 <span class="camera-location">{{ printer.location or '' }}</span>
@@ -26,7 +27,7 @@
                     alt="{{ printer.name }}"
                 >
                 <div class="camera-overlay" id="overlay-{{ printer.serial }}">
-                    <span class="camera-state" id="state-badge-{{ printer.serial }}">OFFLINE</span>
+                    <span class="camera-state state-badge badge-offline" id="state-badge-{{ printer.serial }}">OFFLINE</span>
                 </div>
             </div>
             <div class="ai-result" id="ai-result-{{ printer.serial }}"></div>
@@ -88,7 +89,7 @@
     <h2 class="section-title">🏭 今日产能饱和度 <span class="today-date" id="today-date"></span></h2>
     <div class="utilization-list" id="utilization-today">
         {% for printer in printers %}
-        <div class="utilization-row" id="util-{{ printer.serial }}">
+        <div class="utilization-row" id="util-{{ printer.serial }}" data-serial="{{ printer.serial }}">
             <span class="util-name">{{ printer.name }}</span>
             <span class="util-percent" id="util-pct-{{ printer.serial }}">0.0%</span>
             <div class="util-bar-container">
@@ -113,12 +114,28 @@
 <script src="/static/js/dashboard.js"></script>
 <script src="/static/js/charts.js"></script>
 <script src="/static/js/camera.js"></script>
+<script src="/static/js/sortable.js"></script>
 <script>
     // 初始化
     const PRINTER_SERIALS = [{% for p in printers %}"{{ p.serial }}",{% endfor %}];
     const PRINTER_NAMES = {
         {% for p in printers %}"{{ p.serial }}": "{{ p.name }}",{% endfor %}
     };
+
+    // 在 sortable.js 加载后立即同步执行 applySavedOrder。
+    // applySavedOrder 内部会在完成位置锁定后给 camera-grid 加 .layout-ready，
+    // 取消 dashboard.css 中默认的 visibility: hidden，从此以 inline grid-row/col
+    // 渲染，不再出现“CSS Grid auto-flow 紧凑排列闪烁”。
+    if (typeof applySavedOrder === 'function') applySavedOrder();
+
+    // 安全网：500ms 后强制取消隐藏。避免 sortable.js 加载失败 / applySavedOrder
+    // 中抛错被 try/finally 以外的方式拦截时，camera-grid 永久不显示。
+    // 该 setTimeout 不影响正常路径（applySavedOrder 已同步加上 layout-ready），
+    // 仅在极端异常下作为兜底。
+    setTimeout(() => {
+        const grid = document.getElementById('camera-grid');
+        if (grid) grid.classList.add('layout-ready');
+    }, 500);
 
     document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('today-date').textContent = new Date().toLocaleDateString('zh-CN');
@@ -127,6 +144,7 @@
         initMonthlyChart();
         loadTodayUsage();
         loadMonthlyUsage();
+        initCameraSortable();
     });
 </script>
 {% endblock %}

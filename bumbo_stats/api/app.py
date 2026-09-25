@@ -75,15 +75,17 @@ async def _reload_printers_impl(new_printers: list[PrinterConfig]):
     old_serials = set(manager.serials)
     new_serials = {p.serial for p in new_printers}
 
-    # 移除不存在的打印机
+    # 移除不存在的打印机（add_printer/remove_printer 是 async，必须 await，
+    # 否则只是创建了协程对象而从未执行，_configs 不会更新，
+    # 导致新打印机的状态/产能/趋势接口全部拿不到数据）
     for serial in old_serials - new_serials:
-        manager.remove_printer(serial)
+        await manager.remove_printer(serial)
         logger.info("已移除打印机: %s", serial)
 
     # 添加新打印机
     for printer in new_printers:
         if printer.serial in new_serials - old_serials:
-            manager.add_printer(printer)
+            await manager.add_printer(printer)
             logger.info("已添加打印机: %s (%s)", printer.name, printer.serial)
 
     # 重载摄像头配置（即时更新 access_code 等）

@@ -105,6 +105,11 @@ async function loadMonthlyUsage() {
 function updateMonthlyChart(monthlyData) {
     if (!monthlyChart || !monthlyData.length) return;
 
+    // 跟随用户在摄像头区域拖拽后的排序偏好（sortable.js 提供，可选依赖）
+    if (typeof sortMonthlyDataByPreference === 'function') {
+        monthlyData = sortMonthlyDataByPreference(monthlyData);
+    }
+
     // 从第一台打印机提取日期标签
     const labels = monthlyData[0].points.map(p => {
         const d = new Date(p.date);

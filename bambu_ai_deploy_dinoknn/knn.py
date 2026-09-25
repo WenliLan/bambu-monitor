@@ -273,6 +273,27 @@ class FeatureGallery:
 
     # ============ 状态查询 ============
 
+    def update_threshold(self, new_threshold: float) -> float:
+        """动态更新决策阈值，并持久化到 meta.json
+
+        关键修复：原来仅修改 detector.threshold 不够，detect() 实际读取的是
+        self.decision_threshold（被 FeatureGallery.__init__ 从 meta.json 覆盖）。
+        暴露此方法让调用方能原子地"更新+写 meta.json"，避免重启后回到旧值。
+
+        Args:
+            new_threshold: 新的决策阈值（0~1），由调用方负责截断
+
+        Returns:
+            旧阈值
+        """
+        old = self.decision_threshold
+        self.decision_threshold = float(new_threshold)
+        try:
+            self._save_meta()
+        except Exception as e:
+            print(f"[warn] gallery meta.json 持久化失败（运行时已更新）: {e}")
+        return old
+
     def stats(self) -> dict:
         return {
             "n_anomaly": len(self.anomaly_paths),
