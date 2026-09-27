@@ -110,7 +110,157 @@ function updateCameraBadge(serial, state) {
     // state-badge + badge-{state小写} 提供状态对应的背景/文字色。
     el.className = `camera-state state-badge badge-${state.toLowerCase()}`;
     el.textContent = state;
+
+    // 非 running 状态：把运行状态字体放大并居中覆盖在监控画面中间，
+    // 突出“已完成/暂停/离线”等需要关注的状态；running 时回到左上角
+    // 固定小角标（.camera-overlay 默认位置），不遮挡画面。
+    const overlay = el.closest('.camera-overlay');
+    if (overlay) {
+        overlay.classList.toggle('camera-state-center', state.toLowerCase() !== 'running');
+    }
+
+    // 状态变化提示音：用于提醒打印完成/异常。两条静音规则：
+    // 1. 首次看到该 serial 只记录不鸣响，避免刷新页面时成排“叮”声；
+    // 2. 变到 running 不鸣响——开始打印不需要提醒，只有离开 running
+    //    （完成/暂停/失败等）才是需要用户关注的变化。
+    const prev = lastPrinterStates[serial];
+    if (prev !== undefined && prev !== state && state.toLowerCase() !== 'running') {
+        playStateChime();
+    }
+    lastPrinterStates[serial] = state;
 }
+
+/* ===== 状态变化提示音（跨浏览器/移动端兼容） ===== */
+
+const lastPrinterStates = {};
+let _audioCtx = null;
+let _chimeAudio = null;
+
+// iOS 检测：iPhone/iPod UA，或 iPadOS 13+（伪装成 MacIntel 但带多点触控）。
+// iOS Safari 的 Web Audio 输出受静音拨片屏蔽（静音时永远不出声），
+// 必须降级到 HTML5 <audio>（媒体通道，不受静音拨片影响）。
+function isIOSLike() {
+    const ua = navigator.userAgent || '';
+    if (/iP(hone|ad|od)/.test(ua)) return true;
+    return navigator.platform === 'MacIntel' && (navigator.maxTouchPoints || 0) > 1;
+}
+
+function playStateChime() {
+    try {
+        if (isIOSLike()) {
+            playChimeHtmlAudio();
+            return;
+        }
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) {
+            playChimeHtmlAudio();  // 无 Web Audio 的老浏览器降级
+            return;
+        }
+        _audioCtx = _audioCtx || new AC();
+        if (_audioCtx.state === 'suspended') {
+            // resume() 是异步的：在回调里发声，否则“恰好在 suspended
+            // 状态发生的那次状态变化”会被同步检查吐掉（首次漏报）。
+            _audioCtx.resume().then(() => emitOscillatorChime()).catch(() => {});
+            return;
+        }
+        emitOscillatorChime();
+    } catch (e) {
+        // 发声失败不影响状态更新
+        console.warn('状态提示音播放失败:', e);
+    }
+}
+
+// Web Audio 合成双音“叮—咚”：两个短正弦波错峰发声，带包络避免爆音
+function emitOscillatorChime() {
+    try {
+        if (!_audioCtx || _audioCtx.state !== 'running') return;
+        const t0 = _audioCtx.currentTime;
+        [[880, 0, 0.16], [660, 0.20, 0.22]].forEach(([freq, delay, dur]) => {
+            const osc = _audioCtx.createOscillator();
+            const gain = _audioCtx.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.0001, t0 + delay);
+            gain.gain.exponentialRampToValueAtTime(0.25, t0 + delay + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + dur);
+            osc.connect(gain).connect(_audioCtx.destination);
+            osc.start(t0 + delay);
+            osc.stop(t0 + delay + dur + 0.01);
+        });
+    } catch (e) {
+        console.warn('状态提示音播放失败:', e);
+    }
+}
+
+// HTML5 <audio> 提示音：运行时合成 16bit PCM WAV（880Hz→660Hz 双音）
+// 转 data URI，不依赖外部音频文件；受安卓/iOS 媒体音量控制，且 iOS
+// 上不受静音拨片屏蔽（走媒体通道）。
+function makeChimeWavDataUri() {
+    const rate = 8000;          // 8kHz 采样足够提示音清晰度，体积小
+    const segs = [[880, 0.13], [660, 0.18]];
+    const total = Math.floor(rate * 0.4);
+    const pcm = new Int16Array(total);
+    let idx = 0;
+    for (const [freq, dur] of segs) {
+        const n = Math.floor(rate * dur);
+        for (let i = 0; i < n && idx < total; i++, idx++) {
+            // 淡入淡出包络，避免起始咔哒声
+            const env = Math.min(1, i / (rate * 0.01), (n - i) / (rate * 0.03));
+            pcm[idx] = Math.sin(2 * Math.PI * freq * (i / rate)) * 12000 * env;
+        }
+        idx += Math.floor(rate * 0.04); // 两段间 40ms 间隙
+    }
+    const buf = new ArrayBuffer(44 + pcm.byteLength);
+    const dv = new DataView(buf);
+    const wstr = (o, s) => { for (let i = 0; i < s.length; i++) dv.setUint8(o + i, s.charCodeAt(i)); };
+    wstr(0, 'RIFF'); dv.setUint32(4, 36 + pcm.byteLength, true); wstr(8, 'WAVE');
+    wstr(12, 'fmt '); dv.setUint32(16, 16, true); dv.setUint16(20, 1, true);
+    dv.setUint16(22, 1, true); dv.setUint32(24, rate, true);
+    dv.setUint32(28, rate * 2, true); dv.setUint16(32, 2, true); dv.setUint16(34, 16, true);
+    wstr(36, 'data'); dv.setUint32(40, pcm.byteLength, true);
+    new Int16Array(buf, 44).set(pcm);
+    let bin = '';
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 4096) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 4096));
+    }
+    return 'data:audio/wav;base64,' + btoa(bin);
+}
+
+function playChimeHtmlAudio() {
+    try {
+        _chimeAudio = _chimeAudio || new Audio(makeChimeWavDataUri());
+        _chimeAudio.currentTime = 0;
+        const p = _chimeAudio.play();
+        if (p && p.catch) p.catch(() => {});  // 自动播放被拦时静默降级
+    } catch (e) {
+        console.warn('HTML5 提示音播放失败:', e);
+    }
+}
+
+// 用户首次交互时“解锁”音频（任意一种事件触发一次即可）：
+// - 桌面 Chrome/Edge/Firefox：创建并 resume AudioContext（自动播放策略
+//   要求先有用户手势，否则永远 suspended）；
+// - iOS：在手势内 play 一次 <audio> 解锁媒体会话，后续才能自动出声。
+function primeAudio() {
+    try {
+        if (isIOSLike()) {
+            _chimeAudio = _chimeAudio || new Audio(makeChimeWavDataUri());
+            const p = _chimeAudio.play();
+            if (p && p.then) p.then(() => { _chimeAudio.pause(); _chimeAudio.currentTime = 0; }).catch(() => {});
+            return;
+        }
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        _audioCtx = _audioCtx || new AC();
+        if (_audioCtx.state === 'suspended') _audioCtx.resume().catch(() => {});
+    } catch (e) { /* ignore */ }
+}
+
+// pointerdown 覆盖现代桌面/移动浏览器；touchend/keydown 兑底老 iOS 与纯键盘环境
+document.addEventListener('pointerdown', primeAudio, { once: true });
+document.addEventListener('touchend', primeAudio, { once: true });
+document.addEventListener('keydown', primeAudio, { once: true });
 
 function setText(id, text) {
     const el = document.getElementById(id);

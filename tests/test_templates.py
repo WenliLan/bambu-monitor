@@ -23,6 +23,8 @@
   TC-TPL-20: sortable.js loadSavedOrder 兼容旧格式（数组 [serial, ...]）并自动迁移为位置对象
   TC-TPL-21: sortable.js applySavedOrder 能按位置对象恢复带空格的布局
   TC-TPL-22: 连接中遮罩——未连接时 base.html 有 .connect-overlay，dashboard.css 虚化主内容，dashboard.js 切换 body.ws-connecting
+  TC-TPL-23: dashboard.js 打印机状态变化时播放提示音（Web Audio），首次见到不鸣响
+  TC-TPL-24: 非 running 状态角标放大居中覆盖监控画面（CSS .camera-state-center），running 回左上角
 """
 
 from pathlib import Path
@@ -706,4 +708,123 @@ class TestDashboardTemplate:
         assert "classList.toggle" in set_block and "!connected" in set_block, (
             "setWsStatus 应用 classList.toggle('ws-connecting', !connected)："
             "未连接时加类、已连接时去类"
+        )
+
+    def test_tc_tpl_23_state_change_plays_chime(self):
+        """TC-TPL-23: 任意打印机状态变化时播放提示音，提醒完成/异常
+
+        契约：
+        1. dashboard.js 维护 lastPrinterStates 映射，updateCameraBadge 里
+           只有“前后状态不同”才调用 playStateChime；
+        2. 首次看到某 serial（prev === undefined）只记录不鸣响，
+           避免刷新页面时成排噪声；
+        3. playStateChime 用 Web Audio（createOscillator）合成，不依赖音频文件；
+           整体 try/catch，发声失败不影响状态更新。
+        """
+        js_path = TEMPLATES_DIR.parent / "static" / "js" / "dashboard.js"
+        js = js_path.read_text(encoding="utf-8")
+
+        assert "lastPrinterStates" in js, (
+            "dashboard.js 必须维护 lastPrinterStates 记录每台打印机上次状态，"
+            "用于检测状态变化"
+        )
+        assert "function playStateChime" in js, (
+            "必须实现 playStateChime：用 Web Audio 合成提示音，不依赖音频文件"
+        )
+        chime_idx = js.index("function playStateChime")
+        chime_block = js[chime_idx:chime_idx + 1400]
+        assert "createOscillator" in chime_block, (
+            "提示音必须由 AudioContext.createOscillator 合成"
+        )
+        assert "try" in chime_block and "catch" in chime_block, (
+            "playStateChime 必须 try/catch：浏览器自动播放策略/不支持时"
+            "静默降级，不能影响状态更新主流程"
+        )
+
+        # updateCameraBadge 内：变化才鸣响，首次只记录；变到 running 不鸣响
+        badge_idx = js.index("function updateCameraBadge")
+        badge_block = js[badge_idx:badge_idx + 1200]
+        assert "playStateChime()" in badge_block, (
+            "updateCameraBadge 必须在状态变化时调用 playStateChime()"
+        )
+        assert "prev !== undefined" in badge_block and "prev !== state" in badge_block, (
+            "必须同时满足“非首次见到”且“状态变化”才鸣响，"
+            "避免刷新页面时所有卡片成排发声"
+        )
+        assert "state.toLowerCase() !== 'running'" in badge_block, (
+            "变到 running 不得鸣响：开始打印不需要提醒，"
+            "只有离开 running（完成/暂停/失败等）才需要用户关注"
+        )
+        assert "lastPrinterStates[serial] = state" in badge_block, (
+            "鸣响判断后必须更新 lastPrinterStates，同一状态不重复鸣响"
+        )
+
+        # 跨浏览器/移动端兼容：
+        # 1. suspended 时必须在 resume().then 回调里发声（同步检查会漏首次）
+        resume_idx = js.index("resume().then(() => emitOscillatorChime())")
+        assert resume_idx != -1, (
+            "AudioContext 处于 suspended 时必须在 resume() 异步回调里发声，"
+            "否则恰好在 suspended 状态发生的那次变化会被吐掉（首次漏报）"
+        )
+        # 2. iOS 静音拨片会屏蔽 Web Audio，必须降级 HTML5 <audio>
+        assert "function isIOSLike" in js, (
+            "必须检测 iOS/iPadOS：iOS Safari 的 Web Audio 输出受静音拨片屏蔽"
+        )
+        assert "function playChimeHtmlAudio" in js and "function makeChimeWavDataUri" in js, (
+            "iOS/老浏览器必须降级到 HTML5 <audio> + 运行时合成 WAV data URI"
+            "（媒体通道不受 iOS 静音拨片影响）"
+        )
+        ios_idx = js.index("function playStateChime")
+        ios_block = js[ios_idx:ios_idx + 400]
+        assert "isIOSLike()" in ios_block and "playChimeHtmlAudio()" in ios_block, (
+            "playStateChime 必须在 iOS 分支优先走 HTML5 Audio 通道"
+        )
+        # 3. 解锁手势监听覆盖 pointerdown/touchend/keydown（老 iOS/纯键盘环境）
+        assert "addEventListener('pointerdown', primeAudio" in js, (
+            "必须监听 pointerdown 解锁音频（自动播放策略要求用户手势）"
+        )
+        assert "addEventListener('touchend', primeAudio" in js and "addEventListener('keydown', primeAudio" in js, (
+            "必须额外兑底 touchend/keydown 解锁：老 iOS 无 PointerEvent，"
+            "纯键盘环境可能无指针事件"
+        )
+
+    def test_tc_tpl_24_non_running_badge_centered_enlarged(self):
+        """TC-TPL-24: 非 running 状态角标放大居中覆盖监控画面；running 回左上角
+
+        契约：
+        1. dashboard.css 提供 .camera-overlay.camera-state-center：铺满画面
+           （inset 0）+ flex 居中，且内部 .camera-state 字体明显放大；
+        2. dashboard.js updateCameraBadge 按 state.toLowerCase() !== 'running'
+           切换 .camera-state-center 类：
+           - running → 移除（回到 .camera-overlay 默认 top/left 8px 小角标）
+           - 其它状态 → 加上（放大居中）
+        """
+        css = (TEMPLATES_DIR.parent / "static" / "css" / "dashboard.css").read_text(encoding="utf-8")
+        js_path = TEMPLATES_DIR.parent / "static" / "js" / "dashboard.js"
+        js = js_path.read_text(encoding="utf-8")
+
+        # 1. CSS 居中铺满 + 放大
+        center_idx = css.index(".camera-overlay.camera-state-center {")
+        center_block = css[center_idx:center_idx + 300]
+        assert "display: flex" in center_block, (
+            ".camera-state-center 必须用 flex 居中状态角标"
+        )
+        assert "top: 0" in center_block and "bottom: 0" in center_block, (
+            ".camera-state-center 必须铺满整个监控画面（top/right/bottom/left 0）"
+        )
+        font_idx = css.index(".camera-overlay.camera-state-center .camera-state")
+        font_block = css[font_idx:font_idx + 200]
+        assert "font-size" in font_block, (
+            "非 running 居中状态的字体必须放大（font-size 覆盖默认 0.75rem）"
+        )
+
+        # 2. JS 按 running 切换类
+        badge_idx = js.index("function updateCameraBadge")
+        badge_block = js[badge_idx:badge_idx + 1200]
+        assert "camera-state-center" in badge_block, (
+            "updateCameraBadge 必须切换 .camera-state-center 类"
+        )
+        assert "classList.toggle" in badge_block and "'running'" in badge_block, (
+            "必须用 classList.toggle('camera-state-center', state !== 'running')："
+            "running 回左上角默认位置，其它状态放大居中"
         )

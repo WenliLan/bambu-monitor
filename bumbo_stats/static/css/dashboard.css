@@ -248,6 +248,26 @@ body.ws-connecting main.container {
     left: 8px;
 }
 
+/* 非 running 状态（完成/暂停/离线等）：overlay 铺满整个监控画面，
+   状态字放大居中，突出“不在打印中”；running 时 dashboard.js 移除此类，
+   角标回到左上角固定位置（.camera-overlay 默认 top/left 8px）。 */
+.camera-overlay.camera-state-center {
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.camera-overlay.camera-state-center .camera-state {
+    font-size: 1.9rem;
+    padding: 10px 26px;
+    border-radius: 10px;
+    letter-spacing: 2px;
+}
+
 .camera-state {
     /* 兜底深色背景：未匹配到任何 .badge-* 状态类时仍可读 */
     background: rgba(0,0,0,0.7);
