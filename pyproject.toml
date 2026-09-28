@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bumbo_stats"
-version = "0.5.16"
+version = "0.5.17"
 description = "拓竹3D打印机多机监控面板"
 readme = "README.md"
 license = { text = "MIT" }
@@ -33,6 +33,10 @@ notify = [
 # 仅监控截图(通知文字不需要 SDK 时)
 screenshot = [
     "playwright>=1.40",
+]
+# RTSPS 摄像头机型支持(X1/P2S/P2P/X2D/H2D 等, 自带静态 ffmpeg; 系统已装 ffmpeg 则无需此组)
+rtsp = [
+    "imageio-ffmpeg>=0.4",
 ]
 # AI 缺陷检测(v0.5.15 起仅分发当前部署的 dinoknn 方案): 完整运行时依赖见 requirements-ai.txt
 ai = [

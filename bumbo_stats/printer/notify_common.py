@@ -120,7 +120,7 @@ async def capture_camera_frames(
 
 
 async def capture_camera_one(camera_manager, serial: str) -> Optional[bytes]:
-    """获取单张摄像头帧：优先从 CameraManager 缓存，失败则直连 fallback
+    """获取单张摄像头帧：优先从 CameraManager 缓存，未命中则主动抓帧
 
     Args:
         camera_manager: CameraManager 实例
@@ -137,27 +137,9 @@ async def capture_camera_one(camera_manager, serial: str) -> Optional[bytes]:
     if frame:
         return frame
 
-    # 缓存没有，直连获取（高延迟，但确保拿到帧）
-    config_ip = None
-    config_code = None
-    for pc in camera_manager._configs.values():
-        if pc.serial == serial:
-            config_ip = pc.ip
-            config_code = pc.access_code
-            break
-
-    if not config_ip or not config_code:
-        return None
-
+    # 缓存没有，通过 CameraManager 主动抓帧（自动按机型分流 JPEG/RTSPS 协议）
     try:
-        def _capture():
-            from bambulab import JPEGFrameStream
-            s = JPEGFrameStream(config_ip, config_code)
-            s.connect()
-            f = s.get_frame()
-            s.disconnect()
-            return f
-        frame = await asyncio.to_thread(_capture)
+        frame = await camera_manager.capture_fresh_frame(serial)
         return frame if isinstance(frame, (bytes, bytearray)) else None
     except Exception as e:
         logger.warning("直连摄像头失败 %s: %s", serial, e)

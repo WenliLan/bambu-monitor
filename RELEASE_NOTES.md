@@ -30,8 +30,16 @@ bumbo_stats v{VERSION} 正式发布包
   bumbo-stats login && bumbo-stats serve     # 面板默认 http://本机IP:8000
 
 【环境要求】
-  Python 3.10+（3.11/3.12 已验证）; Windows/Linux/macOS 均可;
-  需可访问局域网内打印机(MQTT 8883端口)与拓竹云端。
+  Python 3.10+（3.11/3.12 已验证）; Windows/Linux/macOS 均可;无需 Anaconda;
+  需可访问局域网内打印机(摄像头 JPEG 6000 / RTSPS 322 端口)与拓竹云端。
+
+【机型摄像头支持(v0.5.17 起全机型)】
+  状态监控/产能/HMS 报警: 所有联网拓竹机型开箱即用(云端 MQTT 统一协议)。
+  摄像头/AI 检测: 按端口自动分流两种协议——
+    A1/A1 mini/P1P/P1S  → TCP 6000 JPEG, 开箱即用;
+    X1 全系/P2S/P2P/X2D/H2D/H2S → RTSPS 322, 需 ffmpeg(三选一):
+      系统安装 ffmpeg 加入 PATH / 设环境变量 BUMBO_FFMPEG_EXE / pip install ".[rtsp]"。
+  未装 ffmpeg 时 RTSPS 机型仅摄像头不可用, 其他功能不受影响。
 
 【安全提醒】
   printers.yaml 填好后含明文凭据,请勿提交到任何仓库;

@@ -98,6 +98,7 @@ bumbo-stats serve
 - 发布包**不含 `tests/`**，不要试图跑 pytest
 - 代码里的 `from bambulab import ...` 对应 PyPI 包 **`bambu-lab-cloud-api`**（已在核心依赖中声明，`pip install .` 会自动装好）；若报 `ModuleNotFoundError: bambulab` 说明依赖未装齐，重跑安装命令即可
 - `pip install ".[ai]"` 会装 torch（数百 MB），**CPU 版即可、无需显卡**；首次提特征会一次性将 ViT-S/14 权重缓存到 `~/.cache/torch`
+- **摄像头按端口自动分流**：A1/P1 系（TCP 6000）开箱即用；X1/P2S/P2P/X2D/H2D 等 RTSPS 机型需 ffmpeg（系统 PATH / `BUMBO_FFMPEG_EXE` / `pip install ".[rtsp]"` 三选一），日志出现“摄像头协议探测: … -> RTSPS(322, ffmpeg)”即生效
 - 通知截图依赖 Playwright，需额外 `playwright install msedge`（或 chromium）
 - `printers.yaml` 含明文 `access_code`/`secret`，**勿提交到公开仓库**
 - 服务默认监听 `0.0.0.0:8000`；公网请改 `--host 127.0.0.1` + 反向代理，本机防火墙需放行 8000
@@ -119,7 +120,17 @@ bumbo-stats serve
 
 ## 可选功能
 
-### 消息通知(企业微信 / 飞书)
+### 机型与摄像头支持（v0.5.17 起全机型）
+
+- **状态监控 / 产能 / HMS 报警**：所有联网拓竹机型开箱即用（云端 MQTT 统一协议，无机型差异）
+- **摄像头画面 / AI 检测**：按端口自动分流两种协议，无需配置：
+  | 机型 | 协议 | 要求 |
+  |---|---|---|
+  | A1 / A1 mini / P1P / P1S | TCP 6000 JPEG | 开箱即用 |
+  | X1 全系 / P2S / P2P / X2D / H2D / H2S 等 | RTSPS 322 | 需 ffmpeg（三选一） |
+- RTSPS 机型的 ffmpeg 任选一种：系统安装 ffmpeg 并加入 PATH；或设环境变量 `BUMBO_FFMPEG_EXE` 指向 ffmpeg.exe；或 `pip install ".[rtsp]"`（自带静态 ffmpeg）。未装时仅该类机型无画面，其他功能不受影响
+
+### 消息通知（企业微信 / 飞书）
 
 - 企业微信:创建智能机器人,填 `bot_id` + `secret`;群聊 `chatid` 留空可自动发现
 - 飞书:创建自建应用并开通 `im.message` 权限,填 `app_id` + `app_secret`;
@@ -167,7 +178,7 @@ python -m pytest tests/test_database.py tests/test_monitor.py -x   # 核心子�
 | 现象 | 处理 |
 |---|---|
 | 启动报"配置文件不存在" | 未复制 `printers.yaml.example` 为 `printers.yaml` |
-| 摄像头黑屏/离线 | 检查打印机与主机同网段、`ip`/`access_code` 是否正确、打印机固件是否开启局域网 |
+| 摄像头画面黑屏/离线 | 检查打印机与主机同网段、`ip`/`access_code` 是否正确、打印机固件是否开启局域网；X1/P2S/X2D/H2D 等 RTSPS 机型需另确认 ffmpeg 可用（日志有“未找到 ffmpeg”告警） |
 | 状态一直 OFFLINE | 重新 `bumbo-stats login` 刷新 Token;确认 `mqtt_broker` 区域与账号一致 |
 | 收不到通知 | 设置页确认对应通道 `enabled`;企微检查机器人在群内;飞书检查应用权限已发布 |
 | AI 检测不生效 | pip 部署需配置 `ai_guard.deploy_dir`;确认 torch 已安装、图库已初始化 |

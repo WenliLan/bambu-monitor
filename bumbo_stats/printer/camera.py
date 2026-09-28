@@ -1,19 +1,42 @@
-"""摄像头管理 - 通过本地 HTTP 获取打印机摄像头 JPEG 帧"""
+"""摄像头管理 - 按机型自动分流摄像头协议
+
+拓竹机型摄像头分两派（与 Bambu Studio / Bambuddy 社区确认一致）：
+- TCP 6000 JPEG 帧流：A1 / A1 mini / P1P / P1S（bambulab SDK JPEGFrameStream）
+- RTSPS 322 端口：X1 全系 / P2S / P2P / X2D / H2D / H2S 等（ffmpeg 取帧，见 rtspcam）
+
+不靠序列号前缀判型（新型号前缀未知易漏），首次采集时探测端口：
+6000 可达→JPEG，否则 322 可达且 ffmpeg 可用→RTSPS，结果按序列号缓存。
+"""
 
 import asyncio
 import logging
+import socket
 from typing import Optional
 
 from ..config import PrinterConfig
+from .rtspcam import find_ffmpeg, capture_rtsp_frame
 
 logger = logging.getLogger(__name__)
 
-# X1 系列型号前缀（摄像头支持有限）
-_X1_PREFIXES = ("BL-P001", "BL-P002")
+# 摄像头协议常量
+PROTO_JPEG = "jpeg"      # TCP 6000，A1/P1 系
+PROTO_RTSPS = "rtsps"    # RTSPS 322，X1/P2/X2/H2 系
+
+# 端口探测超时（秒）
+PROBE_TIMEOUT = 1.5
+
+
+def _tcp_reachable(ip: str, port: int, timeout: float = PROBE_TIMEOUT) -> bool:
+    """探测目标端口是否可建立 TCP 连接"""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 class CameraManager:
-    """管理多台打印机的摄像头帧获取（使用本地 IP + Access Code）"""
+    """管理多台打印机的摄像头帧获取（使用本地 IP + Access Code，协议自动分流）"""
 
     def __init__(self, configs: list[PrinterConfig]):
         self._configs = {c.serial: c for c in configs}
@@ -21,13 +44,11 @@ class CameraManager:
         self._lock = asyncio.Lock()
         self._running = False
         self._supported: dict[str, bool] = {}
+        self._protocol: dict[str, Optional[str]] = {}  # serial -> 探测到的协议（None=未定）
 
-        # 判断哪些打印机支持摄像头
+        # 判断哪些打印机支持摄像头（配了 ip+access_code 即可，协议由探测决定）
         for c in configs:
-            # 需要同时配置 ip 和 access_code 才能获取摄像头
-            has_camera = bool(c.ip and c.access_code)
-            serial_prefix = c.serial[:7] if c.serial else ""
-            self._supported[c.serial] = has_camera and serial_prefix not in _X1_PREFIXES
+            self._supported[c.serial] = bool(c.ip and c.access_code)
 
     async def capture_all_loop(self, interval: float = 3.0):
         """后台循环获取所有打印机摄像头帧
@@ -52,6 +73,45 @@ class CameraManager:
     def stop(self):
         self._running = False
 
+    def _detect_protocol(self, config: PrinterConfig) -> Optional[str]:
+        """探测并缓存该打印机的摄像头协议
+
+        Returns:
+            PROTO_JPEG / PROTO_RTSPS；两端口均不可达时 None（下个周期重试）
+        """
+        serial = config.serial
+        cached = self._protocol.get(serial)
+        if cached:
+            return cached
+
+        if _tcp_reachable(config.ip, 6000):
+            self._protocol[serial] = PROTO_JPEG
+            logger.info("摄像头协议探测: %s -> JPEG(TCP 6000)", serial[-6:])
+            return PROTO_JPEG
+        if _tcp_reachable(config.ip, 322):
+            # RTSPS 需要 ffmpeg；不可用时不缓存，便于对方装好 ffmpeg 后自动启用
+            if find_ffmpeg():
+                self._protocol[serial] = PROTO_RTSPS
+                logger.info("摄像头协议探测: %s -> RTSPS(322, ffmpeg)", serial[-6:])
+                return PROTO_RTSPS
+            return None
+        return None
+
+    async def _grab_frame(self, config: PrinterConfig) -> Optional[bytes]:
+        """按探测到的协议抓取一帧（在线程里执行阻塞操作）"""
+        proto = self._detect_protocol(config)
+        if proto == PROTO_JPEG:
+            def _get():
+                from bambulab import JPEGFrameStream
+                with JPEGFrameStream(config.ip, config.access_code) as stream:
+                    return stream.get_frame()
+            return await asyncio.to_thread(_get)
+        if proto == PROTO_RTSPS:
+            return await asyncio.to_thread(
+                capture_rtsp_frame, config.ip, config.access_code
+            )
+        return None
+
     async def _capture_one(self, serial: str):
         """获取单台打印机的摄像头帧
 
@@ -62,12 +122,7 @@ class CameraManager:
         if not config or not config.ip or not config.access_code:
             return
         try:
-            def _get_frame():
-                from bambulab import JPEGFrameStream
-                with JPEGFrameStream(config.ip, config.access_code) as stream:
-                    return stream.get_frame()
-
-            frame = await asyncio.to_thread(_get_frame)
+            frame = await self._grab_frame(config)
             if frame and isinstance(frame, (bytes, bytearray)):
                 async with self._lock:
                     self._frame_cache[serial] = bytes(frame)
@@ -102,12 +157,7 @@ class CameraManager:
         if not config or not config.ip or not config.access_code:
             return None
         try:
-            def _get_frame():
-                from bambulab import JPEGFrameStream
-                with JPEGFrameStream(config.ip, config.access_code) as stream:
-                    return stream.get_frame()
-
-            frame = await asyncio.to_thread(_get_frame)
+            frame = await self._grab_frame(config)
             if frame and isinstance(frame, (bytes, bytearray)):
                 f = bytes(frame)
                 # 同步刷新缓存，避免其他模块读到旧帧
@@ -147,11 +197,12 @@ class CameraManager:
             self._configs.pop(serial, None)
             self._frame_cache.pop(serial, None)
             self._supported.pop(serial, None)
+            self._protocol.pop(serial, None)
 
-        # 重新判断支持状态
+        # 重新判断支持状态（协议由首次采集时探测）
         for c in configs:
-            has_camera = bool(c.ip and c.access_code)
-            serial_prefix = c.serial[:7] if c.serial else ""
-            self._supported[c.serial] = has_camera and serial_prefix not in _X1_PREFIXES
+            self._supported[c.serial] = bool(c.ip and c.access_code)
+            # 配置可能换了 ip，重置旧探测结果
+            self._protocol.pop(c.serial, None)
 
         logger.info("摄像头配置已重载，共 %d 台打印机", len(self._configs))
