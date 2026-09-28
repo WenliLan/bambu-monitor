@@ -1,16 +1,18 @@
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.backends._legacy:_Backend"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "bumbo_stats"
-version = "0.5.9"
+version = "0.5.10"
 description = "拓竹3D打印机多机监控面板"
+readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
-    "fastapi>=0.109",
+    "fastapi>=0.141",  # 0.141+ 才兼容 Starlette 1.x；旧版会把 starlette<0.36 装回去破坏共享环境
     "uvicorn[standard]>=0.27",
     "jinja2>=3.1",
     "python-multipart>=0.0.6",
@@ -35,6 +37,21 @@ dev = [
 
 [project.scripts]
 bumbo-stats = "bumbo_stats.main:main"
+
+[tool.setuptools]
+# 显式列出子包，避免 flat-layout 自动发现报错；include-package-data
+# 默认开启，配合下方 package-data 把 templates/static 打进 wheel。
+packages = ["bumbo_stats", "bumbo_stats.api", "bumbo_stats.printer"]
+
+[tool.setuptools.package-data]
+# Web 面板的 Jinja2 模板与静态资源必须随包分发，否则 pip install 后 500
+bumbo_stats = [
+    "templates/*.html",
+    "static/css/*.css",
+    "static/js/*.js",
+    "static/img/*.svg",
+    "static/img/*.png",
+]
 
 [tool.ruff]
 line-length = 88

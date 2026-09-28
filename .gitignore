@@ -25,7 +25,13 @@ data/
 *.db
 printers.yaml
 printers.yaml.bak
+printers.yaml.bak.*
 *.local
+# 会话 Cookie / 调试脚本产物（含凭据，绝不入库）
+cookies.txt
+*.cookies
+test_output.txt
+database_full.txt
 
 # Logs
 *.log

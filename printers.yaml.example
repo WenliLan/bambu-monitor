@@ -1,0 +1,77 @@
+# bumbo_stats 配置文件模板
+# 使用方法: 复制本文件为 printers.yaml, 按注释填写各项
+#   Windows: copy printers.yaml.example printers.yaml
+#   Linux/macOS: cp printers.yaml.example printers.yaml
+# 大部分配置也可在面板的 ⚙️ 设置页在线修改并热加载。
+
+cloud:
+  # token_file: ~/.bumbo_token   # 可选, Token 保存路径(默认用户主目录)
+  mqtt_broker: cn                # 拓竹云区域: cn / us, 须与账号注册区域一致
+
+# 打印机列表(可多台)。serial 为机身/包装上的 18 位序列号;
+# ip 与 access_code 仅摄像头画面需要, 在打印机 Web 管理页获取; 不配则只看状态数据。
+printers:
+  - name: 打印机1
+    serial: "000000000000000000"
+    ip: 192.168.1.100
+    access_code: "<打印机管理页获取>"
+    location: 车间A
+  # - name: 打印机2
+  #   serial: "000000000000000000"
+  #   ip: 192.168.1.101
+  #   access_code: "<打印机管理页获取>"
+  #   location: 车间A
+
+settings:
+  host: 0.0.0.0                  # 监听地址; 公网机器建议 127.0.0.1 + 反向代理
+  port: 8000                     # Web 服务端口
+  camera_interval: 3             # 摄像头帧刷新间隔(秒)
+  db_path: ./data/bumbo_stats.db # SQLite 数据库路径
+  dashboard_url: ""              # 通知消息中"打开监控面板"链接(如 http://192.168.1.50:8000/), 留空则不显示链接
+
+# 企业微信智能机器人(可选)。bot_id/secret 在企业微信机器人创建页获取;
+# chatid 留空可自动发现。通知截图依赖 Playwright, 未安装时自动降级为纯文本。
+wecom:
+  enabled: false
+  bot_id: "<机器人 Bot ID>"
+  secret: "<机器人 Secret>"
+  chatid: ""
+  layer3: true                   # 打印到第 3 层时通知
+  progress50: true               # 进度 50% 时通知
+  completed: true                # 打印完成时通知
+  error: true                    # HMS 错误时通知
+
+# 飞书自建应用(可选)。需在开放平台开通 im.message 相关权限并发布版本;
+# urgent_* 为"应用内加急"(强制弹窗+响铃), 留空 urgent_user_id 即不启用。
+feishu:
+  enabled: false
+  app_id: "<App ID>"
+  app_secret: "<App Secret>"
+  chatid: "<群聊 Chat ID>"
+  layer3: true
+  progress50: true
+  completed: true
+  error: true
+  urgent_user_id: ""             # 被加急用户 open_id, 多个用英文逗号分隔
+  urgent_on_events:              # 触发加急的事件: layer3/progress50/completed/error/ai_alarm
+    - error
+  urgent_max_per_hour: 10        # 单用户每小时加急上限, 0 表示不限制
+
+# AI 打印缺陷检测(可选, 依赖 torch 与检测器代码目录)。
+# deploy_dir: bambu_ai_deploy_dinoknn 代码目录; 源码仓库内运行可留空自动探测,
+# pip install 方式部署必须指定(或设环境变量 BUMBO_AI_DEPLOY_DIR); 目录不存在时该功能自动禁用。
+ai_guard:
+  enabled: false
+  interval: 600                  # 检测间隔(秒)
+  frames_per_check: 3            # 每次检测抓帧数量
+  model: fff_gray                # 检测模型: dino_ft / fff_gray
+  track: adapted                 # 模型轨道: adapted / zero
+  threshold: 0.0                 # 分类阈值, 0 表示使用模型推荐默认值(可在群指令中远程调整)
+  alert_frames: 3                # 连续 N 帧异常才报警
+  cooldown: 1800                 # 报警冷却时间(秒)
+  alert_dir: ./data/alerts_review # 报警图片保存目录
+  deploy_dir: ""
+
+ui:
+  # 面板登录密码哈希, 无需手填: 首次打开网页时设置管理员密码自动生成
+  admin_password_hash: ""

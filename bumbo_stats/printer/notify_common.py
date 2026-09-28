@@ -253,14 +253,15 @@ class CommandCooldown:
 def build_threshold_message(
     ai_guard,
     numeric_value: Optional[float],
-    dashboard_url: str = "http://192.168.31.177:8000/",
+    dashboard_url: str = "",
 ) -> str:
     """构建阈值指令响应文本（平台无关，调用方负责发送）
 
     Args:
         ai_guard: AIGuardLoop 实例（用于读取/修改阈值）
         numeric_value: 新阈值（None 表示仅查询当前值）
-        dashboard_url: 监控面板 URL（用于响应结尾链接）
+        dashboard_url: 监控面板 URL（用于响应结尾链接）；留空则不显示链接，
+                       由调用方从 settings.dashboard_url 配置注入（不再硬编码）
 
     Returns:
         渲染好的 markdown 文本（wecom）/ 纯文本（feishu）
@@ -294,10 +295,9 @@ def build_threshold_message(
         msg += (
             f"_（输入 {numeric_value} 超出 0~1 范围，已自动截断为 {current:.2f}）_\n"
         )
-    msg += (
-        f"\n_注: 已持久化到 printers.yaml，重启服务后仍然生效_\n"
-        f"\n[打开监控面板]({dashboard_url})"
-    )
+    msg += f"\n_注: 已持久化到 printers.yaml，重启服务后仍然生效_\n"
+    if dashboard_url:
+        msg += f"\n[打开监控面板]({dashboard_url})"
     return msg
 
 

@@ -117,8 +117,10 @@ class WeComNotifier:
         camera_manager=None,
         printer_manager=None,
         db=None,
+        dashboard_url: str = "",
     ):
         self._cfg = wecom_config
+        self._dashboard_url = dashboard_url  # 阈值响应结尾的面板链接（来自 settings.dashboard_url）
         self._printer_names = {c.serial: c.name for c in printer_configs}
         self._printer_locations = {c.serial: c.location or "" for c in printer_configs}
         self._camera = camera_manager
@@ -633,6 +635,7 @@ class WeComNotifier:
 
         md = nc.build_threshold_message(
             self._ai_guard, item.get("numeric_value"),
+            dashboard_url=self._dashboard_url,
         )
 
         try:

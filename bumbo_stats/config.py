@@ -30,6 +30,11 @@ class AppSettings(BaseModel):
     db_path: str = Field(default="./data/bumbo_stats.db", description="SQLite 数据库路径")
     host: str = Field(default="0.0.0.0", description="Web 服务监听地址")
     port: int = Field(default=8000, description="Web 服务端口")
+    dashboard_url: str = Field(
+        default="",
+        description="通知消息中\"打开监控面板\"的链接（如 http://192.168.1.50:8000/），"
+                    "留空则不显示链接",
+    )
 
 
 class WeComSettings(BaseModel):
@@ -83,6 +88,11 @@ class AIGuardSettings(BaseModel):
     alert_frames: int = Field(default=3, description="连续 N 帧异常才触发报警")
     cooldown: int = Field(default=1800, description="报警冷却时间（秒），默认 30 分钟")
     alert_dir: str = Field(default="./data/alerts_review", description="报警图片保存目录")
+    deploy_dir: str = Field(
+        default="",
+        description="AI 检测器代码目录（bambu_ai_deploy_dinoknn）；留空自动探测，"
+                    "也可用环境变量 BUMBO_AI_DEPLOY_DIR 覆盖。pip install 部署时必须指定",
+    )
 
 
 class UiSettings(BaseModel):

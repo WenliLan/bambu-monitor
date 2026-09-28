@@ -174,18 +174,51 @@ class AIGuardLoop:
         self._save_frame(frame, result.probability, serial)
         return d
 
+    def _resolve_deploy_dir(self) -> Optional[Path]:
+        """解析 AI 检测器代码目录（发布兼容：不依赖源码仓库布局）
+
+        优先级：配置 ai_guard.deploy_dir > 环境变量 BUMBO_AI_DEPLOY_DIR >
+        自动探测候选（源码仓库布局 / 当前工作目录）。pip install 后包在
+        site-packages 里，__file__ 向上找不到仓库目录，必须靠前两项指定。
+        """
+        candidates = []
+        if self._cfg.deploy_dir:
+            candidates.append(Path(self._cfg.deploy_dir))
+        env_dir = os.environ.get("BUMBO_AI_DEPLOY_DIR")
+        if env_dir:
+            candidates.append(Path(env_dir))
+        here = Path(__file__).resolve().parent
+        candidates += [
+            here.parent.parent / "bambu_ai_deploy_dinoknn",  # 仓库内直接运行
+            Path.cwd() / "bambu_ai_deploy_dinoknn",          # 从仓库根启动
+        ]
+        for c in candidates:
+            try:
+                if (c / "detector.py").exists():
+                    return c
+            except OSError:  # 非法路径字符等
+                continue
+        return None
+
     async def _init_detector(self):
         """在子线程中初始化检测器（模型加载约 2-3 秒）"""
         def _load():
             import sys
             from pathlib import Path
+            deploy = self._resolve_deploy_dir()
+            if deploy is None:
+                raise FileNotFoundError(
+                    "未找到 AI 检测器目录（需包含 detector.py）。"
+                    "源码仓库运行时自动探测；pip install 部署请在 printers.yaml 的 "
+                    "ai_guard.deploy_dir 或环境变量 BUMBO_AI_DEPLOY_DIR 中指定路径"
+                )
+            deploy_dir = str(deploy)
             # 将 bambu_ai_deploy_dinoknn 目录加入 sys.path
-            deploy_dir = str(Path(__file__).parent.parent.parent / "bambu_ai_deploy_dinoknn")
             if deploy_dir not in sys.path:
                 sys.path.insert(0, deploy_dir)
             # dino_knn.py 在 baselines/scripts 下, 也是 detector 内部依赖
-            dino_knn_dir = str(Path(deploy_dir).parent.parent / "bambu_AI" / "baselines" / "scripts")
-            if dino_knn_dir not in sys.path:
+            dino_knn_dir = str(deploy.parent.parent / "bambu_AI" / "baselines" / "scripts")
+            if Path(dino_knn_dir).exists() and dino_knn_dir not in sys.path:
                 sys.path.insert(0, dino_knn_dir)
             from detector import PrintDefectDetector
 

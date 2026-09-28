@@ -275,6 +275,7 @@ async def lifespan(app: FastAPI):
                 camera_manager=camera,
                 printer_manager=manager,
                 db=db,
+                dashboard_url=config.settings.dashboard_url,
             )
             await _wecom_notifier.start()
             monitor.wecom_notifier = _wecom_notifier
@@ -304,6 +305,7 @@ async def lifespan(app: FastAPI):
                 camera_manager=camera,
                 printer_manager=manager,
                 db=db,
+                dashboard_url=config.settings.dashboard_url,
             )
             await _feishu_notifier.start()
             monitor.feishu_notifier = _feishu_notifier
