@@ -13,35 +13,94 @@
 
 ## 环境要求
 
-- Python ≥ 3.10(Windows / Linux / macOS 均可,摄像头与局域网访问按平台通用)
-- 拓竹云账号(用于通过云端 API/MQTT 获取打印机状态)
-- 局域网内可访问的拓竹摄像头(可选,不配也能看状态数据)
+- Python ≥ 3.10（Windows / Linux / macOS 均可，摄像头与局域网访问按平台通用）
+- **标准 CPython + pip 即可，无需 Anaconda / conda**；AI 检测用 CPU 版 `torch`，**不需要显卡**
+- 拓竹云账号（用于通过云端 API/MQTT 获取打印机状态）
+- 局域网内可访问的拓竹摄像头（可选，不配也能看状态数据）
 
 ## 快速开始
 
 ```bash
-# 1. 安装(建议使用虚拟环境)
+# 1. 建虚拟环境并安装（建议使用虚拟环境）
 python -m venv venv
 # Windows: venv\Scripts\activate    Linux/macOS: source venv/bin/activate
 
-pip install .                    # 核心:监控面板+云端状态(轻量)
-pip install ".[notify]"          # 推荐:含企微/飞书通知与监控截图;之后补装用同一条命令即可
+pip install ".[notify]"          # 推荐：核心 + 企微/飞书通知（轻量）
+#   需要 AI 缺陷检测： pip install ".[notify,ai]"（含 torch，体积较大，CPU 版即可）
 
-# 2. 登录拓竹云,获取并保存 Token(凭据存于 ~/.bumbo_token)
-bumbo-stats login
-
-# 3. 生成配置文件,按注释填写打印机序列号、IP、摄像头接入码等
+# 2. 先生成配置文件，按注释填写打印机序列号、IP、摄像头接入码等
+#   （必须在下一步 login 之前完成：login/serve 都会强制读取此文件）
 copy printers.yaml.example printers.yaml      # Windows
 cp printers.yaml.example printers.yaml        # Linux/macOS
 
-# 4. 启动服务(默认监听 0.0.0.0:8000)
+# 3. 登录拓竹云，获取并保存 Token（交互式，需邮箱验证码；凭据存于 ~/.bumbo_token）
+bumbo-stats login
+
+# 4. 启动服务（默认监听 0.0.0.0:8000）
 bumbo-stats serve
 ```
 
-浏览器打开 `http://<主机IP>:8000`,首次进入设置管理员密码即可。
+浏览器打开 `http://<主机IP>:8000`，首次进入设置管理员密码即可。
 
-> 通知依赖(企微/飞书 SDK、Playwright)已拆为可选分组:只装核心时通知自动禁用、
-> 面板正常运行;截图功能需要额外执行 `playwright install msedge`(或 chromium)。
+> 通知依赖（企微/飞书 SDK、Playwright）已拆为可选分组：只装核心时通知自动禁用、
+> 面板正常运行；截图功能需要额外执行 `playwright install msedge`（或 chromium）。
+>
+> 👉 想把发布包交给 **AI Agent 自动部署**，直接看下一节「AI Agent 部署 Runbook」。
+
+## 🤖 AI Agent 部署 Runbook
+
+> 面向接收方的编码 Agent（Claude / Cursor 等）：按下列顺序照做即可跑通。标 ⛔ 的步骤必须人类参与，Agent 不能代做。
+
+### 0. 先向人类问清这些输入（缺则无法部署）
+
+- 拓竹云账号 **邮箱 + 密码** ⛔（登录会向该邮箱发验证码，需人工回填）
+- 每台打印机的 **18 位序列号 `serial`**；要看摄像头画面还需打印机局域网 `ip` 与 **接入码 `access_code`**（打印机 Web 管理页 → 安全设置 → 接入码）
+- 可选：是否要消息通知（企业微信/飞书 webhook 凭据）、是否要 AI 缺陷检测
+
+### 1. 安装与启动（全程在发布包根目录，即含 `pyproject.toml` 的目录）
+
+**Windows PowerShell：**
+```powershell
+cd <发布包根目录>
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install ".[notify,ai]"        # 不要 AI 就改成 pip install ".[notify]"
+copy printers.yaml.example printers.yaml
+notepad printers.yaml            # 填入 serial / name / ip / access_code 后保存
+bumbo-stats login                 # ⛔ 交互式：邮箱→密码→邮箱验证码
+bumbo-stats serve                 # 面板 http://<本机IP>:8000
+```
+
+**Linux / macOS bash：**
+```bash
+cd <发布包根目录>
+python3 -m venv venv && source venv/bin/activate
+pip install ".[notify,ai]"        # 不要 AI 就改成 pip install ".[notify]"
+cp printers.yaml.example printers.yaml
+$EDITOR printers.yaml
+bumbo-stats login                 # ⛔ 同上
+bumbo-stats serve
+```
+
+### 2. 部署自检（Agent 逐条验证，全过即成功）
+
+1. `bumbo-stats --version` 有输出
+2. `serve` 日志出现“监控 N 台打印机”与面板地址
+3. 访问 `http://127.0.0.1:8000/login` 返回 200（健康探针，无需登录）
+4. 浏览器首次打开会要求设置面板管理员密码（写入 `ui.admin_password_hash`）
+5. （若装了 AI）日志出现 `[AI Guard] … 启动` 与 `gallery_loaded=True`，且无报错
+
+### 3. 必须知道的坑（Agent 易踩）
+
+- ⛔ **先有 `printers.yaml` 再 `login`/`serve`**：两者都强制读该文件，不存在会直接报错退出
+- ⛔ **`login` 是交互式（邮箱 OTP）**，Agent 不能自动完成，必须交给人工；成功后 Token 写入 `~/.bumbo_token`
+- **AI 检测器自动探测仅在“发布包根目录启动 serve”时生效**；在其他目录启动需配 `ai_guard.deploy_dir` 或环境变量 `BUMBO_AI_DEPLOY_DIR=<根>/bambu_ai_deploy_dinoknn`；目录无效时 AI 自动禁用，不影响其他功能
+- 发布包**不含 `tests/`**，不要试图跑 pytest
+- `pip install ".[ai]"` 会装 torch（数百 MB），**CPU 版即可、无需显卡**；首次提特征会一次性将 ViT-S/14 权重缓存到 `~/.cache/torch`
+- 通知截图依赖 Playwright，需额外 `playwright install msedge`（或 chromium）
+- `printers.yaml` 含明文 `access_code`/`secret`，**勿提交到公开仓库**
+- 服务默认监听 `0.0.0.0:8000`；公网请改 `--host 127.0.0.1` + 反向代理，本机防火墙需放行 8000
+- 重启前确保旧进程已退出，否则端口被占会报错退出；排查可看 `logs/app.log`
 
 ## 配置说明(printers.yaml)
 
