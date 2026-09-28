@@ -50,11 +50,12 @@ $zip = Join-Path $Parent "bumbo_stats_release_v$Version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $OutDir -DestinationPath $zip
 
-# 6. git tag for traceability (skip if exists)
-git -C $Repo tag "v$Version" 2>$null
+# 6. git tag for traceability (check-then-create: git stderr would trip ErrorActionPreference)
+$has_tag = (git -C $Repo tag -l "v$Version" | Measure-Object).Count
+if ($has_tag -eq 0) { git -C $Repo tag "v$Version" }
 
 $files = (Get-ChildItem $OutDir -Recurse -File | Measure-Object).Count
 Write-Host "== DONE ==" -ForegroundColor Green
 Write-Host "Dir:   $OutDir ($files files)"
 Write-Host "Zip:   $zip"
-Write-Host "Tag:   v$Version (push later: git push origin v$Version)"
+Write-Host "Tag:   v$Version $(if ($has_tag) { '(already exists)' } else { '(created)' }) - push later: git push origin v$Version"
