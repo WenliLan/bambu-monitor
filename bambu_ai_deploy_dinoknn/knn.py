@@ -5,7 +5,7 @@
   2. 单条追加 (add), 即时生效
   3. cosine 距离 (特征已 L2 归一化 → 内积)
   4. faiss IndexFlatIP (内积, 对 L2-normalized 向量等价于 cosine)
-  5. 决策: k 个最近邻里 anomaly 占比 → 0~1 概率
+  5. 决策: k 个近邻的相似度加权 anomaly 占比 → 0~1 概率
 
 存储:
   gallery/
@@ -63,7 +63,7 @@ class FeatureGallery:
         参数:
             gallery_dir:         gallery/ 目录路径
             k:                   k-NN 的 k (默认 5)
-            decision_threshold:  anomaly 占比 ≥ 阈值 → 判 anomaly (默认 0.5 = 多数投票)
+            decision_threshold:  加权 anomaly 占比 ≥ 阈值 → 判 anomaly (默认 0.5)
         """
         self.dir = gallery_dir
         self.k = k
@@ -195,10 +195,11 @@ class FeatureGallery:
     ) -> KnnResult:
         """单图特征 -> k-NN 决策.
 
-        决策规则:
-          - k 个最近邻里 anomaly 数 a, normal 数 n
-          - P(anomaly) = a / k
+        决策规则 (相似度加权投票):
+          - 取 k 个最近邻, P(anomaly) = Σsim(anomaly) / Σsim(全部近邻)
           - P(anomaly) >= threshold → anomaly=True
+          - 加权而非等权: 避免 gallery 自身成员被 normal 数量优势票淹没
+            (实测旧等权版对照片少的异常类如 clog 系统性漏报)
 
         边界情况:
           - gallery 为空 → 返回 0.5 (未初始化, 不决策)
@@ -243,10 +244,14 @@ class FeatureGallery:
             sims = (all_feats @ q.T).flatten()
             idxs = np.argsort(-sims)[:k]
 
-        # 统计
+        # 统计: 相似度加权投票 (sim 已 L2 归一化非负; 全 0 时退回等权)
         neighbor_labels = all_labels[idxs]
-        n_a = int(neighbor_labels.sum())
-        prob = n_a / k
+        neighbor_sims = np.clip(np.asarray(sims).flatten()[idxs], 0.0, None)
+        w_sum = float(neighbor_sims.sum())
+        if w_sum > 1e-8:
+            prob = float(neighbor_sims[neighbor_labels == 1].sum() / w_sum)
+        else:
+            prob = int(neighbor_labels.sum()) / k
         anomaly = prob >= self.decision_threshold
         sub = "anomaly" if anomaly else "normal"
 
