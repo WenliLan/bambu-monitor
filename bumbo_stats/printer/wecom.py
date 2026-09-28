@@ -791,6 +791,7 @@ class WeComNotifier:
         # 构建文字 markdown 消息
         md = self._build_markdown(
             printer_name, event, status, errors, ai_alert=ai_alert,
+            dashboard_url=self._dashboard_url,
         )
 
         try:
@@ -850,7 +851,7 @@ class WeComNotifier:
     @staticmethod
     def _build_markdown(
         printer_name: str, event: str, status, errors=None,
-        ai_alert=None,
+        ai_alert=None, dashboard_url: str = "",
     ) -> str:
         """构建 markdown 文字消息
 
@@ -937,7 +938,7 @@ class WeComNotifier:
 
         lines.append("")
         # 面板链接来自配置 settings.dashboard_url，留空则不输出（不再硬编码局域网 IP）
-        if self._dashboard_url:
-            lines.append(f"[打开监控面板]({self._dashboard_url})")
+        if dashboard_url:
+            lines.append(f"[打开监控面板]({dashboard_url})")
 
         return "\n".join(lines)
