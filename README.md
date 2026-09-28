@@ -96,6 +96,7 @@ bumbo-stats serve
 - ⛔ **`login` 是交互式（邮箱 OTP）**，Agent 不能自动完成，必须交给人工；成功后 Token 写入 `~/.bumbo_token`
 - **AI 检测器自动探测仅在“发布包根目录启动 serve”时生效**；在其他目录启动需配 `ai_guard.deploy_dir` 或环境变量 `BUMBO_AI_DEPLOY_DIR=<根>/bambu_ai_deploy_dinoknn`；目录无效时 AI 自动禁用，不影响其他功能
 - 发布包**不含 `tests/`**，不要试图跑 pytest
+- 代码里的 `from bambulab import ...` 对应 PyPI 包 **`bambu-lab-cloud-api`**（已在核心依赖中声明，`pip install .` 会自动装好）；若报 `ModuleNotFoundError: bambulab` 说明依赖未装齐，重跑安装命令即可
 - `pip install ".[ai]"` 会装 torch（数百 MB），**CPU 版即可、无需显卡**；首次提特征会一次性将 ViT-S/14 权重缓存到 `~/.cache/torch`
 - 通知截图依赖 Playwright，需额外 `playwright install msedge`（或 chromium）
 - `printers.yaml` 含明文 `access_code`/`secret`，**勿提交到公开仓库**
