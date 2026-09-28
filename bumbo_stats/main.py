@@ -9,6 +9,8 @@ from pathlib import Path
 
 import uvicorn
 
+from . import __version__
+
 
 def _do_login(args):
     """执行登录子命令"""
@@ -76,7 +78,7 @@ def _do_serve(args):
     host = args.host or config.settings.host
     port = args.port or config.settings.port
 
-    print(f"Bumbo Stats v0.5.3 (云端模式)")
+    print(f"Bumbo Stats v{__version__} (云端模式)")
     print(f"   监控 {len(config.printers)} 台打印机")
     print(f"   面板地址: http://{host}:{port}")
     print()
@@ -109,7 +111,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="bumbo_stats 0.5.3",
+        version=f"bumbo_stats {__version__}",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")

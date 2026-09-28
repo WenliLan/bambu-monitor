@@ -27,6 +27,12 @@ git -C $Repo archive --format=tar --prefix="$RelName/" -o $tar HEAD
 tar -x -f $tar -C $Parent
 Remove-Item $tar
 
+# 2b. inject release notes (template in repo, version stamped at build time)
+if (Test-Path (Join-Path $Repo "RELEASE_NOTES.md")) {
+    (Get-Content (Join-Path $Repo "RELEASE_NOTES.md") -Raw -Encoding UTF8) -replace '\{VERSION\}', $Version |
+        Set-Content (Join-Path $OutDir "RELEASE_NOTES.txt") -Encoding UTF8
+}
+
 # 3. secret scan (fail on hit)
 Write-Host "== Secret scan ==" -ForegroundColor Cyan
 $pat = 'wrdz' + '|' + 'access_code:\s*["' + "'" + '][0-9a-zA-Z]{6}' + '|' + 'secret:\s*["' + "'" + '][0-9a-zA-Z]{8}' + '|' + 'token:\s*["' + "'" + '][0-9a-zA-Z]{20}' + '|' + '192\.168\.31\.'

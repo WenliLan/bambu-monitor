@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bumbo_stats"
-version = "0.5.12"
+version = "0.5.13"
 description = "拓竹3D打印机多机监控面板"
 readme = "README.md"
 license = { text = "MIT" }
