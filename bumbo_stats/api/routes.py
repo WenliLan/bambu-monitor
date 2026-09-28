@@ -1,7 +1,7 @@
 """REST API 路由"""
 
 from fastapi import APIRouter, Request, HTTPException, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from ..config import PrinterConfig
