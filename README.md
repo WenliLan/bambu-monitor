@@ -69,11 +69,10 @@ bumbo-stats serve
 ### AI 缺陷检测
 
 检测器位于 `bambu_ai_deploy_dinoknn/`(kNN 特征库方案,依赖 torch)。
-**发布包(v0.5.14 起)已内置模型权重与预训练特征库**,开箱即可检测;
-源码 git clone 不含大文件(git 历史瘦身),需自行建库或向作者索取权重。
+**发布包与源码仓库(v0.5.14 起)均已内置模型权重与预训练特征库**,开箱即可检测。
 
 - 安装:`pip install ".[ai]"`(含 torch/onnxruntime,体积较大)
-- 开箱即检:特征库在 `bambu_ai_deploy_dinoknn/gallery/`,直接可用
+- 开箱即检:特征库在 `bambu_ai_deploy_dinoknn/gallery/`,直接可用(默认阈值 0.5 多数投票,可在设置页调节)
 - **持续优化**:把你自己拍的照片放入 `bambu_ai_deploy_dinoknn/data/{normal,anomaly}/`,
   运行 `scripts/monitor.py`(watchdog)会自动热追加到特征库,越用越准
 - 历史照片请保在本地——`*_paths.json` 中的路径仅为记账,不影响推理

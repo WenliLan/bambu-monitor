@@ -16,6 +16,7 @@ bumbo_stats v{VERSION} 正式发布包
 【开箱即检】
   模型权重与特征库已随包内置(作者机器长期调优成果), pip install ".[ai]" 后
   配置 ai_guard.enabled: true 即可直接报警,无需任何训练。
+  默认决策阈值 0.5(k=5 多数投票, 连续 3 帧才报警), 可在 Web 设置页随时调节灵敏度。
 
 【持续优化(可选,强烈建议)】
   包内已预留照片收集目录 bambu_ai_deploy_dinoknn/data/{normal,anomaly,uncertain}/

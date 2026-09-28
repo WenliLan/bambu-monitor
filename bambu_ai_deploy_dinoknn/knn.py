@@ -251,6 +251,8 @@ class FeatureGallery:
         sub = "anomaly" if anomaly else "normal"
 
         # top-k 详情 (可解释)
+        # 注意: sims 是扁平化的全量相似度数组, 必须用全局索引 idx 取值;
+        # 早期版本误用排名 i, 导致 nearest 里显示的 similarity 是错的。
         nearest = []
         if return_nearest:
             for i, idx in enumerate(idxs):
@@ -258,8 +260,7 @@ class FeatureGallery:
                     "rank": i + 1,
                     "path": all_paths[idx],
                     "label": "anomaly" if all_labels[idx] == 1 else "normal",
-                    "similarity": float(sims[i] if hasattr(sims, "__len__")
-                                        else sims),
+                    "similarity": float(np.asarray(sims).flatten()[idx]),
                 })
 
         return KnnResult(

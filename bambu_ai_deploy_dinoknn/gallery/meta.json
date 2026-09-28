@@ -1,7 +1,7 @@
 {
   "created": "2026-08-20T16:49:07",
   "k": 5,
-  "decision_threshold": 0.7,
+  "decision_threshold": 0.5,
   "n_anomaly": 134,
   "n_normal": 131,
   "embed_dim": 384,
