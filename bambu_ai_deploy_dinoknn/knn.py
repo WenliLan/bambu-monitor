@@ -233,20 +233,22 @@ class FeatureGallery:
 
         # 内积 (cosine, 因已 L2 归一化)
         q = feat.astype("float32").reshape(1, -1)
+        # 统一产出: idxs = top-k 全局索引(按距离序), top_sims = 对应的 top-k 相似度(同序)
         # 用 faiss (如果有) 或 numpy
         if HAVE_FAISS and len(all_feats) >= 100:
             index = faiss.IndexFlatIP(all_feats.shape[1])
             index.add(all_feats)
-            sims, idxs = index.search(q, min(k, len(all_feats)))
-            sims = sims[0]   # faiss 返回 2-D (1, k), 取第 0 行
-            idxs = idxs[0]
+            fa_sims, fa_idxs = index.search(q, min(k, len(all_feats)))
+            idxs = fa_idxs[0]        # (k,) 全局索引
+            top_sims = fa_sims[0]    # (k,) 已按序的相似度
         else:
-            sims = (all_feats @ q.T).flatten()
-            idxs = np.argsort(-sims)[:k]
+            sims_all = (all_feats @ q.T).flatten()   # (N,) 全量
+            idxs = np.argsort(-sims_all)[:k]          # (k,) 全局索引
+            top_sims = sims_all[idxs]                 # (k,) 对应的相似度
 
         # 统计: 相似度加权投票 (sim 已 L2 归一化非负; 全 0 时退回等权)
         neighbor_labels = all_labels[idxs]
-        neighbor_sims = np.clip(np.asarray(sims).flatten()[idxs], 0.0, None)
+        neighbor_sims = np.clip(np.asarray(top_sims).flatten(), 0.0, None)
         w_sum = float(neighbor_sims.sum())
         if w_sum > 1e-8:
             prob = float(neighbor_sims[neighbor_labels == 1].sum() / w_sum)
@@ -255,9 +257,7 @@ class FeatureGallery:
         anomaly = prob >= self.decision_threshold
         sub = "anomaly" if anomaly else "normal"
 
-        # top-k 详情 (可解释)
-        # 注意: sims 是扁平化的全量相似度数组, 必须用全局索引 idx 取值;
-        # 早期版本误用排名 i, 导致 nearest 里显示的 similarity 是错的。
+        # top-k 详情 (可解释): neighbor_sims[i] 与 idxs[i] 一一对应(均为排名序)
         nearest = []
         if return_nearest:
             for i, idx in enumerate(idxs):
@@ -265,7 +265,7 @@ class FeatureGallery:
                     "rank": i + 1,
                     "path": all_paths[idx],
                     "label": "anomaly" if all_labels[idx] == 1 else "normal",
-                    "similarity": float(np.asarray(sims).flatten()[idx]),
+                    "similarity": float(neighbor_sims[i]),
                 })
 
         return KnnResult(
