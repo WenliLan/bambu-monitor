@@ -3,6 +3,9 @@
 #   Windows: copy printers.yaml.example printers.yaml
 #   Linux/macOS: cp printers.yaml.example printers.yaml
 # 大部分配置也可在面板的 ⚙️ 设置页在线修改并热加载。
+# 敏感字段可用环境变量替代明文落盘(优先级高于本文件):
+#   BUMBO_TOKEN_FILE / BUMBO_WECOM_BOT_ID / BUMBO_WECOM_SECRET /
+#   BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL
 
 cloud:
   # token_file: ~/.bumbo_token   # 可选, Token 保存路径(默认用户主目录)

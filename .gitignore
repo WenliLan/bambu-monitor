@@ -32,6 +32,28 @@ cookies.txt
 *.cookies
 test_output.txt
 database_full.txt
+integration_check.py
+chime_test/
+_check_threads.py
+search_token.py
+.coverage
+
+# AI 模型权重与训练产物（体积大/隐私，不入库；分发用 README 中的获取说明）
+bambu_ai_deploy_onnx/models/
+bambu_ai_deploy_pytorch/models/
+bambu_ai_deploy_dinoknn/gallery/
+*.onnx
+*.onnx.data
+*.pt
+*.npy
+
+# 实拍照片（含工作室画面，隐私）
+alerts_review/
+heatmap_demo/
+
+# 机器专属启动脚本（含本地路径，不适合分发）
+start_service.bat
+register_autostart.ps1
 
 # Logs
 *.log

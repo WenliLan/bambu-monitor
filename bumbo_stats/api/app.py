@@ -16,8 +16,18 @@ from ..database import Database
 from ..printer.camera import CameraManager
 from ..printer.manager import PrinterManager
 from ..printer.monitor import PrintMonitor
-from ..printer.wecom import WeComNotifier, WeComConfig
-from ..printer.feishu import FeishuNotifier, FeishuConfig
+try:
+    # 通知能力可选：未安装 extras 时降级为不启用（pip install "bumbo_stats[notify]"）
+    from ..printer.wecom import WeComNotifier, WeComConfig
+    from ..printer.feishu import FeishuNotifier, FeishuConfig
+    _NOTIFY_AVAILABLE = True
+except ImportError as _e:  # noqa: B902
+    WeComNotifier = WeComConfig = FeishuNotifier = FeishuConfig = None  # type: ignore[assignment]
+    _NOTIFY_AVAILABLE = False
+    logging.getLogger(__name__).warning(
+        "通知模块不可用（缺少依赖: %s），监控面板正常运行；"
+        "如需企微/飞书通知请安装: pip install \"bumbo_stats[notify]\"", _e,
+    )
 from ..printer.ai_guard import AIGuardLoop
 from .routes import router
 from .websocket import ConnectionManager
@@ -29,8 +39,9 @@ _monitor_task: asyncio.Task | None = None
 _camera_task: asyncio.Task | None = None
 _reconnect_task: asyncio.Task | None = None
 _ai_guard: AIGuardLoop | None = None
-_wecom_notifier: WeComNotifier | None = None
-_feishu_notifier: FeishuNotifier | None = None
+# 字符串注解: 通知依赖缺失时两个类被置为 None，避免运行时求值 `None | None` 报 TypeError
+_wecom_notifier: "WeComNotifier | None" = None
+_feishu_notifier: "FeishuNotifier | None" = None
 _ws_manager: ConnectionManager = ConnectionManager()
 
 # 运行时重载函数（在 create_app 中注册到 app.state）
@@ -259,7 +270,7 @@ async def lifespan(app: FastAPI):
         # 只要配置了 bot_id/secret 就创建实例，确保运行时重载能找到 notifier；
         # 实际后台任务的启动由 WeComNotifier.start() 根据 enabled 自行决定。
         global _wecom_notifier
-        if config.wecom.bot_id and config.wecom.secret:
+        if _NOTIFY_AVAILABLE and config.wecom.bot_id and config.wecom.secret:
             _wecom_notifier = WeComNotifier(
                 wecom_config=WeComConfig(
                     enabled=config.wecom.enabled,
@@ -287,7 +298,7 @@ async def lifespan(app: FastAPI):
 
         # 8b. 初始化飞书通知模块（可选）
         global _feishu_notifier
-        if config.feishu.enabled and config.feishu.app_id and config.feishu.app_secret:
+        if _NOTIFY_AVAILABLE and config.feishu.enabled and config.feishu.app_id and config.feishu.app_secret:
             _feishu_notifier = FeishuNotifier(
                 feishu_config=FeishuConfig(
                     app_id=config.feishu.app_id,

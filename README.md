@@ -23,7 +23,9 @@
 # 1. 安装(建议使用虚拟环境)
 python -m venv venv
 # Windows: venv\Scripts\activate    Linux/macOS: source venv/bin/activate
-pip install .
+
+pip install .                    # 核心:监控面板+云端状态(轻量)
+pip install ".[notify]"          # 推荐:含企微/飞书通知与监控截图;之后补装用同一条命令即可
 
 # 2. 登录拓竹云,获取并保存 Token(凭据存于 ~/.bumbo_token)
 bumbo-stats login
@@ -37,6 +39,9 @@ bumbo-stats serve
 ```
 
 浏览器打开 `http://<主机IP>:8000`,首次进入设置管理员密码即可。
+
+> 通知依赖(企微/飞书 SDK、Playwright)已拆为可选分组:只装核心时通知自动禁用、
+> 面板正常运行;截图功能需要额外执行 `playwright install msedge`(或 chromium)。
 
 ## 配置说明(printers.yaml)
 
@@ -59,11 +64,14 @@ bumbo-stats serve
 - 企业微信:创建智能机器人,填 `bot_id` + `secret`;群聊 `chatid` 留空可自动发现
 - 飞书:创建自建应用并开通 `im.message` 权限,填 `app_id` + `app_secret`;
   支持"应用内加急"(弹窗+响铃),适合异常强提醒
-- 通知内容含监控截图,依赖 Playwright:`pip install playwright && playwright install msedge`
+- 安装方式:`pip install ".[notify]"`;通知内容含监控截图,还需 `playwright install msedge`
 
 ### AI 缺陷检测
 
-检测器代码与模型位于仓库 `bambu_ai_deploy_dinoknn/`(kNN 特征库方案,依赖 torch)。
+检测器代码位于仓库 `bambu_ai_deploy_dinoknn/`(kNN 特征库方案,依赖 torch)。
+**模型权重与特征库不在 git 仓库内**(`.pt`/`.onnx`/`.npy` 体积大且含实拍数据),
+需自行训练/获取:用 `scripts/init_gallery.py` 建立正常/异常特征图库,模型文件联系作者获取或按
+`bambu_ai_deploy_pytorch/README.md` 自行转换导出。
 
 - **源码仓库方式运行**:自动探测,无需配置
 - **pip 安装方式运行**:需在 `printers.yaml` 指定 `ai_guard.deploy_dir: /path/to/bambu_ai_deploy_dinoknn`,
@@ -73,8 +81,12 @@ bumbo-stats serve
 ## 安全注意事项
 
 - `printers.yaml` 含打印机 `access_code`、机器人 `secret` 等**明文凭据**,请勿提交到公开仓库(默认已被 `.gitignore` 排除),并妥善保管
+- **多用户/容器环境推荐用环境变量替代明文落盘**(优先级高于 YAML):
+  `BUMBO_TOKEN_FILE`、`BUMBO_WECOM_BOT_ID`、`BUMBO_WECOM_SECRET`、
+  `BUMBO_FEISHU_APP_ID`、`BUMBO_FEISHU_APP_SECRET`、`BUMBO_DASHBOARD_URL`
 - 服务默认监听 `0.0.0.0`,同局域网设备均可访问面板;公网服务器请改用 `--host 127.0.0.1` 并配合反向代理
 - 面板有登录保护(SHA-256 口令哈希 + HttpOnly Cookie),但 Token/密钥未做本地加密存储,多用户环境请限制文件读取权限
+- **分发时请用 git 导出**(`git clone` 或 `git archive`),不要直接打包工作目录:`data/`(数据库、报警实拍照片)、`printers.yaml`(你的全部凭据)、日志均只存在于本地工作区
 
 ## 开发与测试
 

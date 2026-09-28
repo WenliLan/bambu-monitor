@@ -1,6 +1,7 @@
 """配置加载模块 - 从 YAML 文件加载打印机和全局设置"""
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -144,6 +145,28 @@ class AppConfig(BaseModel):
         self.ui.admin_password_hash = self.hash_password(password)
 
 
+def _apply_env_overrides(config: AppConfig) -> AppConfig:
+    """环境变量覆盖敏感配置（避免明文凭据落盘到 YAML）
+
+    支持：BUMBO_TOKEN_FILE / BUMBO_WECOM_BOT_ID / BUMBO_WECOM_SECRET /
+    BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL
+    优先级：环境变量 > printers.yaml，便于容器/CI 场景不写入凭据文件。
+    """
+    env_map = [
+        ("BUMBO_TOKEN_FILE", config.cloud, "token_file"),
+        ("BUMBO_WECOM_BOT_ID", config.wecom, "bot_id"),
+        ("BUMBO_WECOM_SECRET", config.wecom, "secret"),
+        ("BUMBO_FEISHU_APP_ID", config.feishu, "app_id"),
+        ("BUMBO_FEISHU_APP_SECRET", config.feishu, "app_secret"),
+        ("BUMBO_DASHBOARD_URL", config.settings, "dashboard_url"),
+    ]
+    for var, section, attr in env_map:
+        val = os.environ.get(var)
+        if val:
+            setattr(section, attr, val)
+    return config
+
+
 def load_config(config_path: str = "printers.yaml") -> AppConfig:
     """从 YAML 文件加载配置
 
@@ -181,5 +204,7 @@ def load_config(config_path: str = "printers.yaml") -> AppConfig:
     ai_guard = AIGuardSettings(**data.get("ai_guard", {}))
     ui = UiSettings(**data.get("ui", {}))
 
-    return AppConfig(cloud=cloud, printers=printers, settings=settings, wecom=wecom,
-                     feishu=feishu, ai_guard=ai_guard, ui=ui, config_path=str(path))
+    return _apply_env_overrides(AppConfig(
+        cloud=cloud, printers=printers, settings=settings, wecom=wecom,
+        feishu=feishu, ai_guard=ai_guard, ui=ui, config_path=str(path),
+    ))

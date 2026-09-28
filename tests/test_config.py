@@ -108,3 +108,23 @@ class TestModels:
         c = CloudConfig(username="test@test.com")
         assert c.token_file == "~/.bumbo_token"
         assert c.mqtt_broker == "cn"
+
+
+class TestEnvOverrides:
+    """环境变量覆盖敏感配置（发布安全: 避免明文凭据落盘）"""
+
+    def test_tc_cfg_09_env_overrides_secrets(self, sample_config_yaml, monkeypatch):
+        """TC-CFG-09: 环境变量优先级高于 YAML，覆盖凭据类字段"""
+        monkeypatch.setenv("BUMBO_WECOM_SECRET", "env-secret-xyz")
+        monkeypatch.setenv("BUMBO_TOKEN_FILE", "/tmp/env_token")
+        monkeypatch.setenv("BUMBO_DASHBOARD_URL", "http://env.host:8000/")
+        config = load_config(sample_config_yaml)
+        assert config.wecom.secret == "env-secret-xyz"
+        assert config.cloud.token_file == "/tmp/env_token"
+        assert config.settings.dashboard_url == "http://env.host:8000/"
+
+    def test_tc_cfg_10_env_absent_keeps_yaml(self, sample_config_yaml, monkeypatch):
+        """TC-CFG-10: 未设置环境变量时保持 YAML 原值"""
+        monkeypatch.delenv("BUMBO_WECOM_SECRET", raising=False)
+        config = load_config(sample_config_yaml)
+        assert config.wecom.secret != "env-secret-xyz"
