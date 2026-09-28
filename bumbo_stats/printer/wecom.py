@@ -936,6 +936,8 @@ class WeComNotifier:
                 )
 
         lines.append("")
-        lines.append(f"[打开监控面板](http://192.168.31.177:8000/)")
+        # 面板链接来自配置 settings.dashboard_url，留空则不输出（不再硬编码局域网 IP）
+        if self._dashboard_url:
+            lines.append(f"[打开监控面板]({self._dashboard_url})")
 
         return "\n".join(lines)
