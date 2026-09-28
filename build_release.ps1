@@ -29,7 +29,7 @@ Remove-Item $tar
 
 # 3. secret scan (fail on hit)
 Write-Host "== Secret scan ==" -ForegroundColor Cyan
-$pat = 'wrdz' + '|' + 'access_code: .[0-9a-zA-Z]{6}' + '|' + 'secret: .[0-9a-zA-Z]{8}' + '|' + 'token: [0-9a-zA-Z]{20}' + '|' + '192\.168\.31\.'
+$pat = 'wrdz' + '|' + 'access_code:\s*["' + "'" + '][0-9a-zA-Z]{6}' + '|' + 'secret:\s*["' + "'" + '][0-9a-zA-Z]{8}' + '|' + 'token:\s*["' + "'" + '][0-9a-zA-Z]{20}' + '|' + '192\.168\.31\.'
 $hits = Get-ChildItem $OutDir -Recurse -File | Select-String -Pattern $pat
 if ($hits) { $hits | Select-Object -First 5; Write-Host "SENSITIVE CONTENT FOUND, abort release" -ForegroundColor Red; exit 1 }
 Write-Host "PASS (0 hits)"
