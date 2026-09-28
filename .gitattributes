@@ -1,0 +1,9 @@
+# 发布导出排除项：git archive / GitHub zip 不会包含标记 export-ignore 的文件
+# （内部文档含真实凭据示例与 Agent 工作流合约，不对外分发）
+SECURITY_REVIEW.md export-ignore
+DESIGN.md export-ignore
+AGENTS.md export-ignore
+.gitattributes export-ignore
+# 测试套件与子模块内部文档（使用者不需要，开发者 clone 仍可得）
+tests/ export-ignore
+bambu_stats/printer/AGENTS.md export-ignore
