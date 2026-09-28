@@ -33,6 +33,24 @@ if (Test-Path (Join-Path $Repo "RELEASE_NOTES.md")) {
         Set-Content (Join-Path $OutDir "RELEASE_NOTES.txt") -Encoding UTF8
 }
 
+# 2c. photo collection template dirs (kept out of git; users add own photos to keep optimizing)
+$photoRoot = Join-Path $OutDir "bambu_ai_deploy_dinoknn\data"
+foreach ($d in @("normal", "anomaly", "uncertain")) {
+    $sub = Join-Path $photoRoot $d
+    New-Item -ItemType Directory -Force -Path $sub | Out-Null
+    "# place $d photos (.jpg/.png) here" | Set-Content (Join-Path $sub "PLACE_PHOTOS_HERE.txt") -Encoding ASCII
+}
+@"
+Photo collection folders (used to keep improving detection on YOUR machine):
+  normal\    put photos of good prints here
+  anomaly\   put photos of failed prints (stringing, collapse, clog...) here
+  uncertain\ pending manual review, not auto-added
+Two ways to use them:
+  1. hot-update (recommended): pip install watchdog; python scripts/monitor.py
+     -> watcher auto-extracts features and adds normal\anomaly to gallery, no restart
+  2. batch rebuild: python scripts/init_gallery.py  (rebuilds gallery from these folders)
+Note: rebuild replaces the shipped gallery; to keep both, run bootstrap.py --src data instead. """ | Set-Content (Join-Path $photoRoot "README.txt") -Encoding ASCII
+
 # 3. secret scan (fail on hit)
 Write-Host "== Secret scan ==" -ForegroundColor Cyan
 $pat = 'wrdz' + '|' + 'access_code:\s*["' + "'" + '][0-9a-zA-Z]{6}' + '|' + 'secret:\s*["' + "'" + '][0-9a-zA-Z]{8}' + '|' + 'token:\s*["' + "'" + '][0-9a-zA-Z]{20}' + '|' + '192\.168\.31\.'

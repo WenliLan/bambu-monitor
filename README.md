@@ -68,15 +68,20 @@ bumbo-stats serve
 
 ### AI 缺陷检测
 
-检测器代码位于仓库 `bambu_ai_deploy_dinoknn/`(kNN 特征库方案,依赖 torch)。
-**模型权重与特征库不在 git 仓库内**(`.pt`/`.onnx`/`.npy` 体积大且含实拍数据),
-需自行训练/获取:用 `scripts/init_gallery.py` 建立正常/异常特征图库,模型文件联系作者获取或按
-`bambu_ai_deploy_pytorch/README.md` 自行转换导出。
+检测器位于 `bambu_ai_deploy_dinoknn/`(kNN 特征库方案,依赖 torch)。
+**发布包(v0.5.14 起)已内置模型权重与预训练特征库**,开箱即可检测;
+源码 git clone 不含大文件(git 历史瘦身),需自行建库或向作者索取权重。
+
+- 安装:`pip install ".[ai]"`(含 torch/onnxruntime,体积较大)
+- 开箱即检:特征库在 `bambu_ai_deploy_dinoknn/gallery/`,直接可用
+- **持续优化**:把你自己拍的照片放入 `bambu_ai_deploy_dinoknn/data/{normal,anomaly}/`,
+  运行 `scripts/monitor.py`(watchdog)会自动热追加到特征库,越用越准
+- 历史照片请保在本地——`*_paths.json` 中的路径仅为记账,不影响推理
 
 - **源码仓库方式运行**:自动探测,无需配置
-- **pip 安装方式运行**:需在 `printers.yaml` 指定 `ai_guard.deploy_dir: /path/to/bambu_ai_deploy_dinoknn`,
-  或设置环境变量 `BUMBO_AI_DEPLOY_DIR`;目录不存在时 AI 功能自动禁用,不影响其他模块
-- 首次使用需用 `scripts/init_gallery.py` 建立正常/异常特征图库
+- **pip 安装方式运行**:在发布包根目录启动 `bumbo-stats serve` 即可自动探测到检测器;
+  若在其他目录运行,需指定 `ai_guard.deploy_dir` 或环境变量 `BUMBO_AI_DEPLOY_DIR`。
+  目录不存在时 AI 功能自动禁用,不影响其他模块
 
 ## 安全注意事项
 

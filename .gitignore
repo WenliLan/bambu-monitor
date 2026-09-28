@@ -39,13 +39,20 @@ search_token.py
 .coverage
 
 # AI 模型权重与训练产物（体积大/隐私，不入库；分发用 README 中的获取说明）
-bambu_ai_deploy_onnx/models/
-bambu_ai_deploy_pytorch/models/
-bambu_ai_deploy_dinoknn/gallery/
+# ---- AI 发布资产: 模型权重/特征库/DINOv2 缓存随发布包分发, 纳入跟踪 (v0.5.14 起)
+# 照片仍不分发: bambu_ai_deploy_dinoknn/data/ 由 build 脚本生成空模板目录
+bambu_ai_deploy_dinoknn/data/
+# 以下为历史忽略规则(已改为跟踪, 留着会与上面对立规则冲突, 故删除):
+# bambu_ai_deploy_onnx/models/  bambu_ai_deploy_pytorch/models/  bambu_ai_deploy_dinoknn/gallery/
 *.onnx
 *.onnx.data
 *.pt
 *.npy
+# 反选: AI 发布资产目录下的权重/特征库不受上面的扩展名忽略
+!bambu_ai_deploy_onnx/models/**
+!bambu_ai_deploy_pytorch/models/**
+!bambu_ai_deploy_dinoknn/gallery/**
+!bambu_ai_deploy_dinoknn/dinov2_cache/**
 
 # 实拍照片（含工作室画面，隐私）
 alerts_review/

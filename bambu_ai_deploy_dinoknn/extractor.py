@@ -15,12 +15,13 @@ from typing import Sequence
 
 import numpy as np
 
-# 把 baselines/scripts 加进 sys.path, 让 dino_knn 可被 import
-# deploy 包位于 baselines/bambu_ai_deploy_dinoknn/, 上层 ../ 即 baselines/scripts
+# dino_knn 优先用本目录内置副本（发布包自含）；旧研究仓布局下回退到 baselines/scripts
 _HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 _SCRIPTS = os.path.normpath(os.path.join(_HERE, "..", "scripts"))
-if _SCRIPTS not in sys.path:
-    sys.path.insert(0, _SCRIPTS)
+if os.path.isdir(_SCRIPTS) and _SCRIPTS not in sys.path:
+    sys.path.append(_SCRIPTS)
 
 # 复用项目里的 dino_knn (已含 load_model / extract / TFM 等)
 import dino_knn  # noqa: E402
