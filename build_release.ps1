@@ -40,16 +40,18 @@ foreach ($d in @("normal", "anomaly", "uncertain")) {
     New-Item -ItemType Directory -Force -Path $sub | Out-Null
     "# place $d photos (.jpg/.png) here" | Set-Content (Join-Path $sub "PLACE_PHOTOS_HERE.txt") -Encoding ASCII
 }
-@"
-Photo collection folders (used to keep improving detection on YOUR machine):
-  normal\    put photos of good prints here
-  anomaly\   put photos of failed prints (stringing, collapse, clog...) here
-  uncertain\ pending manual review, not auto-added
-Two ways to use them:
-  1. hot-update (recommended): pip install watchdog; python scripts/monitor.py
-     -> watcher auto-extracts features and adds normal\anomaly to gallery, no restart
-  2. batch rebuild: python scripts/init_gallery.py  (rebuilds gallery from these folders)
-Note: rebuild replaces the shipped gallery; to keep both, run bootstrap.py --src data instead. """ | Set-Content (Join-Path $photoRoot "README.txt") -Encoding ASCII
+$readmeLines = @(
+  'Photo collection folders (used to keep improving detection on YOUR machine):',
+  '  normal\    put photos of good prints here',
+  '  anomaly\   put photos of failed prints (stringing, collapse, clog...) here',
+  '  uncertain\ pending manual review, not auto-added',
+  'Two ways to use them:',
+  '  1. hot-update (recommended): pip install watchdog; python scripts/monitor.py',
+  '     -> watcher auto-extracts features and adds normal\anomaly to gallery, no restart',
+  '  2. batch rebuild: python scripts/init_gallery.py  (rebuilds gallery from these folders)',
+  'Note: rebuild replaces the shipped gallery; to keep both, run bootstrap.py --src data instead.'
+)
+Set-Content (Join-Path $photoRoot "README.txt") -Value $readmeLines -Encoding ASCII
 
 # 3. secret scan (fail on hit)
 Write-Host "== Secret scan ==" -ForegroundColor Cyan
