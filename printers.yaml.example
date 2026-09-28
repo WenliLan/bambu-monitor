@@ -61,19 +61,18 @@ feishu:
   urgent_max_per_hour: 10        # 单用户每小时加急上限, 0 表示不限制
 
 # AI 打印缺陷检测(可选, 依赖 torch 与检测器代码目录)。
-# deploy_dir: bambu_ai_deploy_dinoknn 代码目录; 源码仓库内运行可留空自动探测,
+# 发布包内置 DINOv2+kNN 检测器(bambu_ai_deploy_dinoknn), 开箱即检。
+# deploy_dir: 源码仓库内运行可留空自动探测,
 # pip install 方式部署必须指定(或设环境变量 BUMBO_AI_DEPLOY_DIR); 目录不存在时该功能自动禁用。
 ai_guard:
   enabled: false
   interval: 600                  # 检测间隔(秒)
   frames_per_check: 3            # 每次检测抓帧数量
-  model: fff_gray                # 检测模型: dino_ft / fff_gray
-  track: adapted                 # 模型轨道: adapted / zero
-  threshold: 0.0                 # 分类阈值, 0 表示使用模型推荐默认值(可在群指令中远程调整)
+  threshold: 0.0                 # 决策阈值(0~1), 0 表示用特征库默认值 0.5; 建议 0.5~0.8, 可在 Web 设置页/群指令远程调整
   alert_frames: 3                # 连续 N 帧异常才报警
   cooldown: 1800                 # 报警冷却时间(秒)
   alert_dir: ./data/alerts_review # 报警图片保存目录
-  deploy_dir: ""
+  deploy_dir: ""                 # 检测器代码目录(留空自动探测)
 
 ui:
   # 面板登录密码哈希, 无需手填: 首次打开网页时设置管理员密码自动生成

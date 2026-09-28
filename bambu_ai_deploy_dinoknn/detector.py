@@ -33,7 +33,7 @@ IMG_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
 
 @dataclass
 class DetectionResult:
-    """单帧检测结果 (与 bambu_ai_deploy_pytorch 同口径)"""
+    """单帧检测结果 (与旧版 pytorch 部署包同口径, 仅保留字段兼容)"""
     anomaly: bool
     probability: float          # k-NN 投出的 anomaly 占比
     threshold: float            # 决策阈值

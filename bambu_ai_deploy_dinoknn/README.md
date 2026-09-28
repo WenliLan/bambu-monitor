@@ -323,18 +323,12 @@ from pathlib import Path
 
 ---
 
-## 与其他部署包的关系
+## 为什么是 kNN 方案
 
-| 部署包 | 决策层 | 训练 | 增量适配 | Grad-CAM++ |
-|--------|--------|------|---------|-----------|
-| `bambu_ai_deploy_onnx` | ONNX Runtime + fc | ❌ | ❌ | ❌ (ONNX 不支持反向) |
-| `bambu_ai_deploy_pytorch` | PyTorch + ResNet50 fc | ❌ | ❌ | ✅ 真 Grad-CAM++ |
-| **`bambu_ai_deploy_dinoknn`** ← 本包 | **DINOv2 + kNN** | **零训练** | **✅ 丢图即用** | ❌ (ViT 无 conv) |
-
-适用场景对比：
-- **ONNX 版**：生产部署，CPU 推理最快 (~30ms)，无热更新
-- **PyTorch 版**：需要可解释性 (Grad-CAM++)，无热更新
-- **DINOv2+kNN 版** ← 本包：用户持续往里丢图优化，零训练
+发布包只内置本检测器(当前生产部署方案)。对比旧式分类器方案：
+- 零训练：不需要维护训练管线，丢图即生效
+- 可持续优化：照片越攒越多，阈值可在 Web 设置页实时调节
+- 可解释：每次报警都附最近邻参考图（报警 meta.json 里的 nearest_top3）
 
 ---
 

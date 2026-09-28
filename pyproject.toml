@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bumbo_stats"
-version = "0.5.14"
+version = "0.5.15"
 description = "拓竹3D打印机多机监控面板"
 readme = "README.md"
 license = { text = "MIT" }
@@ -34,13 +34,12 @@ notify = [
 screenshot = [
     "playwright>=1.40",
 ]
-# AI 缺陷检测(v0.5.14 起模型权重/特征库随包分发): 完整运行时依赖见 requirements-ai.txt
+# AI 缺陷检测(v0.5.15 起仅分发当前部署的 dinoknn 方案): 完整运行时依赖见 requirements-ai.txt
 ai = [
     "numpy>=1.24",
     "Pillow>=10.0",
     "torch>=2.1",
     "torchvision>=0.16",
-    "onnxruntime>=1.16",
     "watchdog>=3.0",
 ]
 dev = [

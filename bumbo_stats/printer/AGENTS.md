@@ -46,7 +46,7 @@
 
 ## AI 异常守卫（ai_guard.py）
 
-- 串联三个部署目录下的模型：`bambu_ai_deploy_pytorch`（PyTorch）、`bambu_ai_deploy_onnx`（ONNX Runtime）、`bambu_ai_deploy_dinoknn`（DINOv2 + kNN）。
+- 使用 `bambu_ai_deploy_dinoknn`（DINOv2 + kNN，当前生产部署方案）；旧研究方案 `bambu_ai_deploy_onnx`/`bambu_ai_deploy_pytorch` 仅留在本地，不入 git 不入发布包。
 - 评分阈值、冷却时间、报警帧采样间隔均由 `printers.yaml` 提供，不要硬编码覆盖。
 - 命中后将帧缓存到 `data/alerts_review/<serial>_<ts>_P<score>/`，由 `wecom.py`/`feishu.py` 异步推送。
 

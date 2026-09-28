@@ -5,9 +5,7 @@ bumbo_stats v{VERSION} 正式发布包
 
 【包内容】
   bumbo_stats/               主程序(FastAPI + MQTT + SQLite + Web 面板)
-  bambu_ai_deploy_dinoknn/   AI 缺陷检测器(kNN 方案,含模型权重+预训练特征库 gallery/)
-  bambu_ai_deploy_onnx/      AI 检测器(ONNX 方案,含 .onnx 权重,推理更轻)
-  bambu_ai_deploy_pytorch/   AI 检测器(PyTorch 方案,含 .pt 权重)
+  bambu_ai_deploy_dinoknn/   AI 缺陷检测器(含 DINOv2 权重+预训练特征库 gallery/)
   requirements-ai.txt        AI 检测运行时依赖清单
   printers.yaml.example      配置模板(全字段带中文注释)
   README.md                  使用说明(安装/配置/通知/AI/FAQ)
