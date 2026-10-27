@@ -45,11 +45,12 @@ $readmeLines = @(
   '  normal\    put photos of good prints here',
   '  anomaly\   put photos of failed prints (stringing, collapse, clog...) here',
   '  uncertain\ pending manual review, not auto-added',
-  'Two ways to use them:',
-  '  1. hot-update (recommended): pip install watchdog; python scripts/monitor.py',
+  'Two ways to use them (run from the bambu_ai_deploy_dinoknn directory):',
+  '  1. hot-update (recommended): pip install watchdog; python watcher.py',
   '     -> watcher auto-extracts features and adds normal\anomaly to gallery, no restart',
-  '  2. batch rebuild: python scripts/init_gallery.py  (rebuilds gallery from these folders)',
-  'Note: rebuild replaces the shipped gallery; to keep both, run bootstrap.py --src data instead.'
+  '  2. batch rebuild: python scripts/init_gallery.py --src data --append',
+  'Note: a full rebuild replaces the shipped gallery; --append keeps both.',
+  'These are optional detector tools; the monitoring panel never needs them.'
 )
 Set-Content (Join-Path $photoRoot "README.txt") -Value $readmeLines -Encoding ASCII
 

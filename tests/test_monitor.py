@@ -451,7 +451,6 @@ class TestHMSErrorNotification:
 
     async def test_tc_mon_29_severe_levels_trigger_notify(self, monitor):
         """TC-MON-29: fatal/serious/error 三个严重级别都触发，common/warning 不触发"""
-        from bumbo_stats.printer.wecom import EVENT_ERROR
         # 避免 _check_progress_events 头部的“未配置任何 notifier”早退
         monitor.wecom_notifier = MagicMock()
         monitor._notify_all = MagicMock()
@@ -481,7 +480,6 @@ class TestHMSErrorNotification:
 
     async def test_tc_mon_31_partial_mixed_severities(self, monitor):
         """TC-MON-31: 混合 severity，只推送严重级别项"""
-        from bumbo_stats.printer.wecom import EVENT_ERROR
         monitor.wecom_notifier = MagicMock()
         monitor._notify_all = MagicMock()
         # 3 个严重 + 2 个仅提示

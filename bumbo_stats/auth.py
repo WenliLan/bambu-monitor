@@ -139,32 +139,44 @@ class TokenManager:
 
     def _handle_verify_code(self, session, base_url: str, username: str, region: str) -> str:
         """处理验证码验证（中国区用短信，全球区用邮件）"""
-        import requests
+        hint = self._send_verify_code(session, base_url, username, region)
+        logger.info(hint)
+        print(hint)
 
+        # 交互式获取验证码（getpass 不回显，避免误把验证码留在终端）
+        code = getpass.getpass("请输入验证码，输入后按回车: ")
+        if not code.strip():
+            raise RuntimeError("验证码不能为空")
+        return self._verify_code_token(session, base_url, username, region, code.strip())
+
+    def _send_verify_code(self, session, base_url: str, username: str, region: str) -> str:
+        """发送短信/邮件验证码并校验接口响应（P3-8：不能只看 HTTP 200）"""
         if region == "china":
-            # 中国区：发送短信验证码（使用 phone 字段）
             send_payload = {"phone": username, "countryCode": "86"}
             endpoint = f"{base_url}/v1/user-service/user/sendsmscode"
             hint = "短信验证码已发送到你的手机"
         else:
-            # 全球区：发送邮件验证码
             send_payload = {"email": username, "type": "codeLogin"}
             endpoint = f"{base_url}/v1/user-service/user/sendemail/code"
             hint = "验证码已发送到你的注册邮箱"
 
         resp = session.post(endpoint, json=send_payload, timeout=30)
-        resp.raise_for_status()
-        logger.info(hint)
-        print(hint)
+        try:
+            resp.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(f"验证码发送失败: HTTP {resp.status_code}") from e
+        try:
+            data = resp.json()
+        except ValueError:
+            data = None
+        if isinstance(data, dict) and data.get("success") is False:
+            reason = data.get("message") or data.get("error") or "接口返回失败"
+            raise RuntimeError(f"验证码发送失败: {reason}")
+        return hint
 
-        # 交互式获取验证码
-        print("请输入验证码，输入后按回车: ", end="", flush=True)
-        code = getpass.getpass("")
-        if not code.strip():
-            raise RuntimeError("验证码不能为空")
-
-        # 验证
-        verify_payload = {"account": username, "code": code.strip()}
+    def _verify_code_token(self, session, base_url: str, username: str, region: str, code: str) -> str:
+        """用验证码换取 Token 并落盘"""
+        verify_payload = {"account": username, "code": code}
         resp = session.post(
             f"{base_url}/v1/user-service/user/login",
             json=verify_payload,
@@ -192,10 +204,83 @@ class TokenManager:
         logger.info("登录成功")
         return token
 
-    def _handle_mfa(self, session, base_url: str, tfa_key: str, region: str) -> str:
-        """处理 MFA 两步验证"""
+    def begin_login(self, username: str, password: str, region: str = "global") -> dict:
+        """非交互式登录第一步（供网页端调用）
+
+        Returns:
+            {"status": "ok", "token": str}
+            或 {"status": "need_code", "session": requests.Session,
+                "base_url": str, "username": str, "region": str, "hint": str}
+            或 {"status": "need_tfa", "session": ..., "base_url": str,
+                "tfa_key": str, "username": str, "region": str}
+        """
         import requests
 
+        base_url = self._get_base_url(region)
+        session = requests.Session()
+        session.headers.update(HEADERS)
+
+        login_payload = {"account": username, "password": password, "apiError": ""}
+        try:
+            resp = session.post(
+                f"{base_url}/v1/user-service/user/login",
+                json=login_payload,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.exceptions.RequestException as e:
+            raise RuntimeError(f"登录请求失败: {e}") from e
+
+        if data.get("success"):
+            token = data.get("accessToken")
+            if not token:
+                raise RuntimeError("登录成功但未返回 Token")
+            self.save_token(token, region=region)
+            return {"status": "ok", "token": token}
+
+        login_type = data.get("loginType")
+        if login_type == "verifyCode":
+            hint = self._send_verify_code(session, base_url, username, region)
+            return {
+                "status": "need_code", "session": session, "base_url": base_url,
+                "username": username, "region": region, "hint": hint,
+            }
+        if login_type == "tfa":
+            return {
+                "status": "need_tfa", "session": session, "base_url": base_url,
+                "tfa_key": data.get("tfaKey", ""), "username": username, "region": region,
+            }
+
+        error_msg = data.get("message", data.get("error", "未知登录错误"))
+        raise RuntimeError(f"登录失败: {error_msg}")
+
+    def complete_login(self, pending: dict, code: str) -> str:
+        """非交互式登录第二步：提交短信/邮件验证码或 MFA 码"""
+        if pending.get("status") == "need_code":
+            return self._verify_code_token(
+                pending["session"], pending["base_url"],
+                pending["username"], pending["region"], code,
+            )
+        if pending.get("status") == "need_tfa":
+            resp = pending["session"].post(
+                f"{pending['base_url']}/api/sign-in/tfa",
+                json={"tfaKey": pending.get("tfa_key", ""), "tfaCode": code},
+                timeout=30,
+            )
+            resp.raise_for_status()
+            token = resp.cookies.get_dict().get("token")
+            if not token:
+                data = resp.json()
+                token = data.get("accessToken") or data.get("token")
+            if not token:
+                raise RuntimeError("MFA 验证失败")
+            self.save_token(token, region=pending["region"])
+            return token
+        raise RuntimeError("没有待完成的登录流程")
+
+    def _handle_mfa(self, session, base_url: str, tfa_key: str, region: str) -> str:
+        """处理 MFA 两步验证"""
         print("多因素认证已启用，请输入 MFA 验证码: ", end="", flush=True)
         code = getpass.getpass("")
         if not code.strip():
@@ -234,13 +319,14 @@ class TokenManager:
 
     def _validate_token(self, token: str, region: str = "global") -> bool:
         """验证 Token 是否仍然有效"""
-        try:
-            from bambulab import BambuClient
+        from .cloud_api import BambuCloudClient, CloudAPIError
 
-            BambuClient.BASE_URL = "https://api.bambulab.cn" if region == "china" else "https://api.bambu.com"
-            client = BambuClient(token=token)
-            devices = client.get_devices()
-            return devices is not None
-        except Exception as e:
+        client = BambuCloudClient(token=token, region=region)
+        try:
+            client.get_devices()
+            return True
+        except CloudAPIError as e:
             logger.debug("Token 验证失败: %s", e)
             return False
+        finally:
+            client.close()

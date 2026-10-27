@@ -18,7 +18,7 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
-from bumbo_stats.config import AppConfig, PrinterConfig, AppSettings, CloudConfig, UiSettings
+from bumbo_stats.config import AppConfig, PrinterConfig, AppSettings, CloudConfig
 from bumbo_stats.models import PrinterStatus, PrinterState, TodayUsageItem, MonthlyUsage, MonthlyUsagePoint
 
 
@@ -82,59 +82,70 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture
+def auth_client():
+    """已登录客户端（P2-14 之后所有页面/API 都需要会话）"""
+    app = _create_test_app()
+    app.state.config.ui.admin_password_hash = app.state.config.hash_password("admin")
+    c = TestClient(app)
+    resp = c.post("/api/auth/login", json={"password": "admin"})
+    assert resp.status_code == 200
+    return c
+
+
 class TestDashboardRoute:
-    def test_tc_api_01_dashboard_html(self, client):
+    def test_tc_api_01_dashboard_html(self, auth_client):
         """TC-API-01: GET / 返回 HTML 页面"""
-        resp = client.get("/")
+        resp = auth_client.get("/")
         assert resp.status_code == 200
         assert "Bumbo Stats" in resp.text
         assert "camera-grid" in resp.text
 
 
 class TestPrinterRoutes:
-    def test_tc_api_02_get_all_printers(self, client):
+    def test_tc_api_02_get_all_printers(self, auth_client):
         """TC-API-02: GET /api/printers"""
-        resp = client.get("/api/printers")
+        resp = auth_client.get("/api/printers")
         assert resp.status_code == 200
         data = resp.json()
         assert "S001" in data
         assert data["S001"]["state"] == "IDLE"
 
-    def test_tc_api_05_get_single_printer(self, client):
+    def test_tc_api_05_get_single_printer(self, auth_client):
         """TC-API-05: GET /api/printers/{serial}"""
-        resp = client.get("/api/printers/S001")
+        resp = auth_client.get("/api/printers/S001")
         assert resp.status_code == 200
         data = resp.json()
         assert data["serial"] == "S001"
         assert data["name"] == "TestP1"
 
-    def test_tc_api_06_camera_404(self, client):
+    def test_tc_api_06_camera_404(self, auth_client):
         """TC-API-06: 摄像头无帧时返回404"""
-        resp = client.get("/api/printers/S001/camera")
+        resp = auth_client.get("/api/printers/S001/camera")
         assert resp.status_code == 404
 
 
 class TestUsageRoutes:
-    def test_tc_api_03_today_usage(self, client):
+    def test_tc_api_03_today_usage(self, auth_client):
         """TC-API-03: GET /api/usage/today"""
-        resp = client.get("/api/usage/today")
+        resp = auth_client.get("/api/usage/today")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
         assert data[0]["printer_serial"] == "S001"
         assert data[0]["utilization_percent"] == 4.2
 
-    def test_tc_api_04_monthly_usage(self, client):
+    def test_tc_api_04_monthly_usage(self, auth_client):
         """TC-API-04: GET /api/usage/monthly"""
-        resp = client.get("/api/usage/monthly?days=7")
+        resp = auth_client.get("/api/usage/monthly?days=7")
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
         assert data[0]["printer_name"] == "TestP1"
 
-    def test_tc_api_07_sessions(self, client):
+    def test_tc_api_07_sessions(self, auth_client):
         """TC-API-07: GET /api/sessions/{serial}"""
-        resp = client.get("/api/sessions/S001")
+        resp = auth_client.get("/api/sessions/S001")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
@@ -146,7 +157,8 @@ class TestSettingsRoutes:
     def _set_auth(self, client, password="admin"):
         cfg = client.app.state.config
         cfg.ui.admin_password_hash = cfg.hash_password(password)
-        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
+        resp = client.post("/api/auth/login", json={"password": password})
+        assert resp.status_code == 200
 
     def test_tc_api_08_settings_page_requires_auth(self, client):
         """TC-API-08: 未登录访问 /settings 显示登录页"""
@@ -182,8 +194,7 @@ class TestSettingsRoutes:
     def test_tc_api_12_save_cloud_config(self, client):
         """TC-API-12: 保存云端配置"""
         cfg = client.app.state.config
-        cfg.ui.admin_password_hash = cfg.hash_password("admin")
-        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
+        self._set_auth(client, "admin")
         resp = client.post("/api/settings/cloud", json={
             "token_file": "~/.bumbo_token",
             "mqtt_broker": "us",
@@ -194,9 +205,8 @@ class TestSettingsRoutes:
     def test_tc_api_13_save_printers_config(self, client):
         """TC-API-13: 保存打印机配置"""
         cfg = client.app.state.config
-        cfg.ui.admin_password_hash = cfg.hash_password("admin")
+        self._set_auth(client, "admin")
         cfg._reload_printers = AsyncMock()
-        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
         resp = client.post("/api/settings/printers", json={
             "printers": [
                 {"name": "P1", "serial": "S002", "ip": "1.2.3.4",
@@ -210,9 +220,8 @@ class TestSettingsRoutes:
     def test_tc_api_14_save_wecom_config(self, client):
         """TC-API-14: 保存企业微信配置"""
         cfg = client.app.state.config
-        cfg.ui.admin_password_hash = cfg.hash_password("admin")
+        self._set_auth(client, "admin")
         cfg._reload_wecom = AsyncMock()
-        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
         resp = client.post("/api/settings/wecom", json={
             "bot_id": "bot123",
             "secret": "secret456",
@@ -230,9 +239,7 @@ class TestSettingsRoutes:
     def test_tc_api_15_change_password(self, client):
         """TC-API-15: 修改管理员密码"""
         cfg = client.app.state.config
-        old_hash = cfg.hash_password("oldpw")
-        cfg.ui.admin_password_hash = old_hash
-        client.cookies.set(self.AUTH_COOKIE, old_hash)
+        self._set_auth(client, "oldpw")
         resp = client.post("/api/settings/password", json={"password": "newpw"})
         assert resp.status_code == 200
         assert cfg.ui.admin_password_hash == cfg.hash_password("newpw")
@@ -265,13 +272,12 @@ class TestSettingsRoutes:
 
     def test_tc_api_19_printers_reload_called(self, client):
         """TC-API-19: 保存打印机后调用重载函数"""
-        cfg = client.app.state.config
-        cfg.ui.admin_password_hash = cfg.hash_password("admin")
+        self._set_auth(client, "admin")
         # _reload_printers 应该在 app.state 上（与 routes.py 中一致）
         reload_mock = AsyncMock()
         client.app.state._reload_printers = reload_mock
-        client.cookies.set(self.AUTH_COOKIE, cfg.ui.admin_password_hash)
         resp = client.post("/api/settings/printers", json={
             "printers": [{"name": "P1", "serial": "X001", "ip": "", "access_code": "", "location": ""}],
         })
+        assert resp.status_code == 200
         reload_mock.assert_called_once()

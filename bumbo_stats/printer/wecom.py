@@ -290,6 +290,16 @@ class WeComNotifier:
         """注入 AI 检测循环引用（用于阈值指令调用 set_threshold）"""
         self._ai_guard = ai_guard
 
+    def sync_printers(self, printer_configs) -> None:
+        """面板增删打印机后同步名称/通知状态表（无需重启服务）"""
+        self._printer_names = {c.serial: c.name for c in printer_configs}
+        old = getattr(self, "_states", {})
+        self._states = {
+            c.serial: old.get(c.serial) or _PrinterNotifState()
+            for c in printer_configs
+        }
+        logger.info("企业微信通知已同步打印机列表: %d 台", len(self._states))
+
     async def send_test_message(self) -> bool:
         """发送测试消息：一条文字 + 仅第一台打印机的 1 张截图
 
@@ -392,7 +402,6 @@ class WeComNotifier:
     async def _run_loop(self):
         """后台主循环：连接 WeCom WebSocket + 处理通知队列"""
         from wecom_aibot_sdk import WSClient
-        from wecom_aibot_sdk.logger import DefaultLogger
         
         while self._running:
             try:
@@ -435,8 +444,18 @@ class WeComNotifier:
                             await self._process_help(item)
                         elif item.get("event") == "threshold":
                             await self._process_threshold(item)
-                        else:
+                        elif item.get("event") in (
+                            EVENT_LAYER3, EVENT_PROGRESS50, EVENT_COMPLETED,
+                            EVENT_ERROR, EVENT_AI_ALARM,
+                        ):
                             await self._process_notification(item)
+                        else:
+                            # 共享 COMMANDS 里出现了本平台未实现的指令：明确回复而非静默
+                            await self._reply_text(
+                                item.get("chatid") or self._chatid or self._cfg.chatid,
+                                f"该指令（{item.get('event')}）在企业微信侧暂不支持，"
+                                "发送「帮助」查看可用指令。",
+                            )
                     except asyncio.TimeoutError:
                         pass
                     except asyncio.CancelledError:
@@ -482,18 +501,40 @@ class WeComNotifier:
             return
         parsed = nc.parse_command(text)
         if not parsed:
+            logger.info("企业微信入站消息未匹配指令: %r", text.strip()[:60])
+            await self._reply_text(
+                chatid, "未识别到指令。发送「帮助」查看支持的关键词列表。"
+            )
             return
         if not self._cmd_cooldown.check(parsed.command):
+            wait_s = int(self._cmd_cooldown.remaining(parsed.command) + 0.999)
+            logger.info("企业微信指令 [%s] 冷却中: %r", parsed.command, text.strip()[:60])
+            await self._reply_text(
+                chatid, f"⏳ 该指令刚刚已响应过，请 {wait_s} 秒后再试。"
+            )
             return
         try:
             self._queue.put_nowait({
                 "event": parsed.command, "ts": time.time(),
                 "raw_text": parsed.raw_text,
                 "numeric_value": parsed.numeric_value,
+                "chatid": chatid,
             })
             logger.info("收到指令 [%s]，已入队: %s", parsed.command, text.strip()[:50])
         except asyncio.QueueFull:
             logger.warning("通知队列已满，丢弃指令 [%s]", parsed.command)
+
+    async def _reply_text(self, chatid: str, text: str) -> None:
+        """回复群聊文本（拒绝/冷却提示，P2-18）"""
+        if not chatid or not text or not self._client:
+            return
+        try:
+            await self._client.send_message(chatid, {
+                "msgtype": "text",
+                "text": {"content": text},
+            })
+        except Exception as e:
+            logger.warning("企业微信提示消息发送失败: %s", e)
 
     @staticmethod
     def _extract_text(body: dict) -> str:

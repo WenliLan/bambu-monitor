@@ -3,6 +3,9 @@
 #   Windows: copy printers.yaml.example printers.yaml
 #   Linux/macOS: cp printers.yaml.example printers.yaml
 # 大部分配置也可在面板的 ⚙️ 设置页在线修改并热加载。
+# ⚠️ 手改本文件前请先停止 serve: 运行中的面板保存设置时只回写本次修改的段,
+#    但仍可能覆盖你刚手工加入的内容; 每次写回会保留一份 printers.yaml.bak。
+#    增删打印机可直接用面板「设置 → 打印机」(即时生效, 无需重启)。
 # 敏感字段可用环境变量替代明文落盘(优先级高于本文件):
 #   BUMBO_TOKEN_FILE / BUMBO_WECOM_BOT_ID / BUMBO_WECOM_SECRET /
 #   BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL
@@ -11,25 +14,30 @@ cloud:
   # token_file: ~/.bumbo_token   # 可选, Token 保存路径(默认用户主目录)
   mqtt_broker: cn                # 拓竹云区域: cn / us, 须与账号注册区域一致
 
-# 打印机列表(可多台)。serial 为机身/包装上的 18 位序列号;
-# ip 与 access_code 仅摄像头画面需要, 在打印机 Web 管理页获取; 不配则只看状态数据。
+# 打印机列表(可多台)。serial 请照抄机身/包装标签(长度随机型为 15-18 位,
+# 以云端 get_devices 返回的 dev_id 为准); ip 与 access_code 仅摄像头画面需要,
+# 在打印机 Web 管理页获取; 不配则只看状态数据。
 printers:
   - name: 打印机1
-    serial: "000000000000000000"
+    serial: "<机身标签序列号>"
     ip: 192.168.1.100
     access_code: "<打印机管理页获取>"
     location: 车间A
   # - name: 打印机2
-  #   serial: "000000000000000000"
+  #   serial: "<机身标签序列号>"
   #   ip: 192.168.1.101
   #   access_code: "<打印机管理页获取>"
   #   location: 车间A
 
 settings:
-  host: 0.0.0.0                  # 监听地址; 公网机器建议 127.0.0.1 + 反向代理
+  # 默认只监听回环地址: 本机浏览器访问 http://127.0.0.1:8000 即可。
+  # 需要局域网其他设备访问时改为 0.0.0.0, 并务必先设置管理员密码
+  # (未设密码时服务会引导首次设置, 不会裸奔)。
+  host: 127.0.0.1
   port: 8000                     # Web 服务端口
   camera_interval: 3             # 摄像头帧刷新间隔(秒)
-  db_path: ./data/bumbo_stats.db # SQLite 数据库路径
+  db_path: ./data/bumbo_stats.db # SQLite 数据库路径(相对启动时所在目录)
+  log_dir: ./logs                # 日志目录(相对启动时所在目录), 文件为 app.log, 按天轮转保留 7 天
   dashboard_url: ""              # 通知消息中"打开监控面板"链接(如 http://192.168.1.50:8000/), 留空则不显示链接
 
 # 企业微信智能机器人(可选)。bot_id/secret 在企业微信机器人创建页获取;
@@ -44,7 +52,9 @@ wecom:
   completed: true                # 打印完成时通知
   error: true                    # HMS 错误时通知
 
-# 飞书自建应用(可选)。需在开放平台开通 im.message 相关权限并发布版本;
+# 飞书自建应用(可选)。需在开放平台开通 im:chat 读权限、im:message 发送权限与
+# im:message.group_at_msg 事件订阅(使用长连接接收事件)并发布版本;
+# chatid 可点面板「🔍 获取群聊」自动列出并回填(需先把机器人加入该群)。
 # urgent_* 为"应用内加急"(强制弹窗+响铃), 留空 urgent_user_id 即不启用。
 feishu:
   enabled: false
@@ -61,11 +71,12 @@ feishu:
   urgent_max_per_hour: 10        # 单用户每小时加急上限, 0 表示不限制
 
 # AI 打印缺陷检测(可选, 依赖 torch 与检测器代码目录)。
-# 发布包内置 DINOv2+kNN 检测器(bambu_ai_deploy_dinoknn), 开箱即检。
-# deploy_dir: 源码仓库内运行可留空自动探测,
-# pip install 方式部署必须指定(或设环境变量 BUMBO_AI_DEPLOY_DIR); 目录不存在时该功能自动禁用。
+# 发布包内置 DINOv2+kNN 检测器(bambu_ai_deploy_dinoknn), 无需训练。
+# 只有安装了 pip install ".[ai]" 时才把 enabled 改为 true; 未装依赖时保持 false。
+# deploy_dir: 在发布包根目录启动 serve 可留空自动探测, 其他目录需指定
+# (或设环境变量 BUMBO_AI_DEPLOY_DIR); 目录无效时该功能自动禁用, 不影响其他模块。
 ai_guard:
-  enabled: false
+  enabled: false                 # 装 [ai] 后改为 true
   interval: 600                  # 检测间隔(秒)
   frames_per_check: 3            # 每次检测抓帧数量
   threshold: 0.0                 # 决策阈值(0~1), 0 表示用特征库默认值 0.5; 建议 0.5~0.8, 可在 Web 设置页/群指令远程调整

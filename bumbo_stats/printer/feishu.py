@@ -200,6 +200,76 @@ class FeishuNotifier:
         """注入 AIGuardLoop 引用，用于响应 /threshold 命令"""
         self._ai_guard = ai_guard
 
+    def sync_printers(self, printer_configs) -> None:
+        """面板增删打印机后同步名称/通知状态表（无需重启服务）"""
+        self._printer_names = {c.serial: c.name for c in printer_configs}
+        old = getattr(self, "_states", {})
+        self._states = {
+            c.serial: old.get(c.serial) or _PrinterNotifState()
+            for c in printer_configs
+        }
+        logger.info("飞书通知已同步打印机列表: %d 台", len(self._states))
+
+    async def fetch_group_chats(self, app_id: str = "", app_secret: str = "") -> list[dict]:
+        """列出机器人所在群聊（需要 im:chat 读权限）
+
+        Args:
+            app_id/app_secret: 未保存表单值时可直接传入；留空使用当前配置
+
+        Returns:
+            [{"chat_id": "oc_...", "name": "..."}]
+        """
+        import aiohttp
+
+        aid = app_id or self._cfg.app_id
+        asec = app_secret or self._cfg.app_secret
+        if not aid or not asec:
+            raise RuntimeError("app_id/app_secret 未配置")
+
+        async with aiohttp.ClientSession() as sess:
+            async with sess.post(
+                "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                json={"app_id": aid, "app_secret": asec},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                token_data = await resp.json()
+            token = token_data.get("tenant_access_token")
+            if not token:
+                raise RuntimeError(
+                    f"获取 tenant_access_token 失败: {token_data.get('msg', token_data)}"
+                )
+
+            chats: list[dict] = []
+            page_token = ""
+            while True:
+                params = {"page_size": 50}
+                if page_token:
+                    params["page_token"] = page_token
+                async with sess.get(
+                    "https://open.feishu.cn/open-apis/im/v1/chats",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    payload = await resp.json()
+                if payload.get("code") != 0:
+                    raise RuntimeError(
+                        f"获取群列表失败: {payload.get('msg', payload)}（"
+                        "请确认应用已开通 im:chat 读权限并已发布版本）"
+                    )
+                data = payload.get("data") or {}
+                for item in data.get("items") or []:
+                    chats.append({
+                        "chat_id": item.get("chat_id", ""),
+                        "name": item.get("name", ""),
+                    })
+                if not data.get("has_more"):
+                    break
+                page_token = data.get("page_token", "")
+                if not page_token:
+                    break
+        return chats
+
     def update_config(self, new_cfg: FeishuConfig):
         """运行时更新配置（来自 /api/settings/feishu 重载）"""
         self._cfg = new_cfg
@@ -415,7 +485,6 @@ class FeishuNotifier:
         我们每 30s 主动检查 self._ws_client._conn 是否存在，
         以及后台线程是否还活着（daemon 线程一旦 start() 异常退出就废了）。
         """
-        import threading as _th
         while self._running:
             try:
                 await asyncio.sleep(30.0)
@@ -513,7 +582,6 @@ class FeishuNotifier:
 
     async def _run_loop(self):
         """后台主循环：获取 token + 处理通知队列 + 处理指令队列"""
-        from datetime import datetime
         while self._running:
             try:
                 # 获取 tenant_access_token
@@ -527,7 +595,12 @@ class FeishuNotifier:
                         )
                         event = item.get("event", "")
                         # 指令事件 vs 通知事件分发
-                        if event in ("snapshot", "status", "overview", "help", "threshold"):
+                        if event == "__reply__":
+                            await self._reply_text(
+                                item.get("chat_id") or self._cfg.chatid,
+                                item.get("text", ""),
+                            )
+                        elif event in ("snapshot", "status", "overview", "help", "threshold"):
                             await self._process_command(item)
                         else:
                             await self._process_notification(item)
@@ -635,9 +708,27 @@ class FeishuNotifier:
             parsed = nc.parse_command(text)
             if not parsed:
                 logger.info("飞书入站消息 @机器人 但不匹配任何指令: text=%r", text[:60])
+                # P2-18：拒绝路径不能静默，否则与“机器人挂了”无法区分
+                try:
+                    self._queue.put_nowait({
+                        "event": "__reply__",
+                        "chat_id": getattr(msg, "chat_id", ""),
+                        "text": "未识别到指令。发送「帮助」查看支持的关键词列表。",
+                    })
+                except asyncio.QueueFull:
+                    pass
                 return
             if not self._cmd_cooldown.check(parsed.command):
+                wait_s = int(self._cmd_cooldown.remaining(parsed.command) + 0.999)
                 logger.info("飞书入站消息 [%s] 在冷却中，忽略: text=%r", parsed.command, text[:60])
+                try:
+                    self._queue.put_nowait({
+                        "event": "__reply__",
+                        "chat_id": getattr(msg, "chat_id", ""),
+                        "text": f"⏳ 该指令刚刚已响应过，请 {wait_s} 秒后再试。",
+                    })
+                except asyncio.QueueFull:
+                    pass
                 return
 
             try:
@@ -1008,6 +1099,33 @@ class FeishuNotifier:
     # 群聊指令处理（与 wecom 五个指令一致）
     # ------------------------------------------------------------------
 
+    async def _reply_text(self, chat_id: str, text: str) -> None:
+        """向指定群聊发送一条纯文本（用于拒绝/冷却提示，P2-18）"""
+        if not chat_id or not text:
+            return
+        if not self._tenant_token or time.time() >= self._token_expires_at:
+            await self._refresh_token()
+        if not self._tenant_token:
+            logger.warning("飞书 tenant_token 不可用，无法回复群指令")
+            return
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+                    headers={"Authorization": f"Bearer {self._tenant_token}"},
+                    json={
+                        "receive_id": chat_id,
+                        "msg_type": "text",
+                        "content": json.dumps({"text": text}, ensure_ascii=False),
+                    },
+                    timeout=aiohttp.ClientTimeout(total=15),
+                ) as resp:
+                    payload = await resp.json()
+            if payload.get("code") != 0:
+                logger.warning("飞书提示消息发送失败: %s", payload.get("msg", payload))
+        except Exception as e:
+            logger.warning("飞书提示消息发送异常: %s", e)
+
     async def _process_command(self, item: dict):
         """分发群聊指令到具体处理函数"""
         chat_id = item.get("chat_id") or self._cfg.chatid
@@ -1027,6 +1145,11 @@ class FeishuNotifier:
                 await self._cmd_threshold(chat_id, item.get("numeric_value"))
             elif cmd == "help":
                 await self._cmd_help(chat_id)
+            else:
+                await self._reply_text(
+                    chat_id,
+                    f"该指令（{cmd}）在当前通知平台暂不支持，发送「帮助」查看可用指令。",
+                )
         except Exception as e:
             logger.error("飞书指令 [%s] 处理失败: %s", cmd, e)
 

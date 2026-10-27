@@ -29,7 +29,11 @@ class AppSettings(BaseModel):
     """全局应用设置"""
     camera_interval: int = Field(default=3, description="摄像头帧刷新间隔（秒）")
     db_path: str = Field(default="./data/bumbo_stats.db", description="SQLite 数据库路径")
-    host: str = Field(default="0.0.0.0", description="Web 服务监听地址")
+    log_dir: str = Field(
+        default="./logs",
+        description="日志目录（相对路径按启动时的工作目录解析；默认 ./logs）",
+    )
+    host: str = Field(default="127.0.0.1", description="Web 服务监听地址")
     port: int = Field(default=8000, description="Web 服务端口")
     dashboard_url: str = Field(
         default="",
@@ -79,12 +83,14 @@ class FeishuSettings(BaseModel):
 
 
 class AIGuardSettings(BaseModel):
-    """AI 异常报警配置"""
+    """AI 异常报警配置
+
+    注意：历史版本中的 ``model`` / ``track`` 从未传给检测器，属于“看起来有效”
+    的无效配置项（P2-11），已删除；旧 YAML 里残留这两个键会被忽略。
+    """
     enabled: bool = Field(default=True, description="是否启用 AI 异常报警")
     interval: int = Field(default=600, description="检测间隔（秒），默认 10 分钟")
     frames_per_check: int = Field(default=10, description="每次检测抓帧数量")
-    model: str = Field(default="fff_gray", description="检测模型: dino_ft / fff_gray")
-    track: str = Field(default="adapted", description="模型轨道: adapted / zero")
     threshold: float = Field(default=0.0, description="分类阈值，0 表示使用模型推荐默认值")
     alert_frames: int = Field(default=3, description="连续 N 帧异常才触发报警")
     cooldown: int = Field(default=1800, description="报警冷却时间（秒），默认 30 分钟")
@@ -114,8 +120,18 @@ class AppConfig(BaseModel):
     # 避免测试等场景下误覆盖工作目录中的真实 printers.yaml
     config_path: Optional[str] = Field(default=None, exclude=True)
 
-    def save_yaml(self, path: Optional[str] = None):
-        """将当前配置保存到 YAML 文件（默认写回加载来源路径）"""
+    def save_yaml(self, path: Optional[str] = None, sections: Optional[list[str]] = None):
+        """将配置写回 YAML 文件（默认写回加载来源路径）
+
+        Args:
+            path: 目标路径；默认使用加载时的配置文件
+            sections: 仅写回这些顶层段（如 ``["ai_guard"]``）。
+                未指定的段保持磁盘上的现有内容，避免把用户手工编辑的
+                打印机/凭据/注释结构整体覆盖（P2-12）。``None`` 表示全量写回。
+
+        写入方式：先写临时文件再原子替换，并保留一份 ``.bak`` 备份，
+        避免进程中断或磁盘写满导致配置文件被截断。
+        """
         path = path or self.config_path or "printers.yaml"
         data = {
             "cloud": self.cloud.model_dump(),
@@ -126,8 +142,42 @@ class AppConfig(BaseModel):
             "ai_guard": self.ai_guard.model_dump(),
             "ui": self.ui.model_dump(),
         }
-        with open(path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, allow_unicode=True, sort_keys=False)
+
+        target = Path(path)
+        merged = data
+        # 仅在目标文件已存在且可解析时做分段合并；首次创建或读取失败时
+        # 全量写回，避免生成缺少 cloud/printers 等必需段的残缺配置。
+        if sections is not None and target.exists():
+            existing = None
+            try:
+                with open(target, "r", encoding="utf-8") as f:
+                    loaded = yaml.safe_load(f)
+                if isinstance(loaded, dict):
+                    existing = loaded
+            except Exception as e:
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "读取现有配置失败，将全量写回 %s: %s", target, e
+                )
+            if existing is not None:
+                merged = dict(existing)
+                for name in sections:
+                    if name in data:
+                        merged[name] = data[name]
+
+        tmp = target.with_name(target.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            yaml.dump(merged, f, allow_unicode=True, sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+
+        if target.exists():
+            try:
+                import shutil
+                shutil.copy2(target, target.with_name(target.name + ".bak"))
+            except OSError:
+                pass
+        os.replace(tmp, target)
 
     @staticmethod
     def hash_password(password: str) -> str:
@@ -149,7 +199,8 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
     """环境变量覆盖敏感配置（避免明文凭据落盘到 YAML）
 
     支持：BUMBO_TOKEN_FILE / BUMBO_WECOM_BOT_ID / BUMBO_WECOM_SECRET /
-    BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL
+    BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL /
+    BUMBO_LOG_DIR
     优先级：环境变量 > printers.yaml，便于容器/CI 场景不写入凭据文件。
     """
     env_map = [
@@ -159,6 +210,7 @@ def _apply_env_overrides(config: AppConfig) -> AppConfig:
         ("BUMBO_FEISHU_APP_ID", config.feishu, "app_id"),
         ("BUMBO_FEISHU_APP_SECRET", config.feishu, "app_secret"),
         ("BUMBO_DASHBOARD_URL", config.settings, "dashboard_url"),
+        ("BUMBO_LOG_DIR", config.settings, "log_dir"),
     ]
     for var, section, attr in env_map:
         val = os.environ.get(var)

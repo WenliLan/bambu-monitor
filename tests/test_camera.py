@@ -66,13 +66,15 @@ class TestCameraFrame:
 @pytest.mark.asyncio
 class TestProtocolDispatch:
     async def test_tc_cam_05_jpeg_dispatch(self, cam_configs):
-        """TC-CAM-05: 6000 可达 -> JPEG 协议(MagicMock 帧被类型检查拒绝, 不写缓存)"""
+        """TC-CAM-05: 6000 可达 -> JPEG 协议, 走本地 JPEGFrameStream"""
         cam = CameraManager(cam_configs)
-        with patch("bumbo_stats.printer.camera._tcp_reachable", return_value=True):
+        with patch("bumbo_stats.printer.camera._tcp_reachable", return_value=True), \
+             patch("bumbo_stats.printer.jpegstream.JPEGFrameStream") as stream_cls:
+            stream_cls.return_value.__enter__.return_value.get_frame.return_value = b"jpeg-frame"
             frame = await cam.capture_fresh_frame("AC12309BH109")
-        # bambulab 已被 conftest mock 成 MagicMock, 返回帧非 bytes
         assert cam._protocol.get("AC12309BH109") == PROTO_JPEG
-        assert frame is None
+        assert frame == b"jpeg-frame"
+        stream_cls.assert_called_once_with("1.1.1.2", "0001")
 
     async def test_tc_cam_05b_jpeg_bytes_cached(self, cam_configs):
         """TC-CAM-05b: JPEG 分支返回 bytes 时刷新缓存"""

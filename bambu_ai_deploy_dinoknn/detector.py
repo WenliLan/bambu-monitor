@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_GALLERY_DIR = os.path.join(HERE, "gallery")
 DEFAULT_ALERT_DIR = os.path.join(HERE, "alerts_review")
 IMG_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+logger = logging.getLogger("dinoknn")
 
 
 @dataclass
@@ -141,7 +143,7 @@ class PrintDefectDetector:
             try:
                 self._save_single_frame(img, result)
             except Exception as e:
-                print(f"[warn] 帧保存失败: {e}")
+                logger.warning("帧保存失败: %s", e)
 
         self._history.append(result)
         self._pending_frames.append(img)
@@ -186,9 +188,10 @@ class PrintDefectDetector:
         feat = extract_one_from_pil(img)
         path = path or (image if isinstance(image, str) else f"<memory:{label}>")
         self.gallery.add(feat, label, path)
-        print(f"[gallery] +1 {label}: {path} "
-              f"(a={len(self.gallery.anomaly_paths)} "
-              f"n={len(self.gallery.normal_paths)})")
+        logger.info(
+            "gallery +1 %s: %s (a=%d n=%d)",
+            label, path, len(self.gallery.anomaly_paths), len(self.gallery.normal_paths),
+        )
 
     def reset(self) -> None:
         """重置连续帧计数 + 历史."""

@@ -9,7 +9,6 @@
 
 import pytest
 from pathlib import Path
-from unittest.mock import patch
 
 from bumbo_stats.auth import TokenManager
 
@@ -42,7 +41,6 @@ class TestTokenManager:
     def test_tc_auth_03_tilde_expansion(self, tmp_token_dir, monkeypatch):
         """TC-AUTH-03: ~ 路径正确展开"""
         # 模拟 ~ 展开到 tmp 目录
-        expanded = str(tmp_token_dir / "token")
         mgr = TokenManager("~/test_token")
 
         # 验证路径正确展开

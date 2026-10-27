@@ -7,7 +7,6 @@
   TC-CLI-04: 自定义参数解析
 """
 
-import sys
 import pytest
 from unittest.mock import patch
 
@@ -33,7 +32,6 @@ class TestCLI:
 
     def test_tc_cli_03_default_args(self, sample_config_yaml):
         """TC-CLI-03: 默认参数解析正确"""
-        import argparse
         # 仅测试参数解析，不启动服务
         with patch("sys.argv", ["bumbo-stats", "--config", sample_config_yaml]):
             from bumbo_stats.config import load_config

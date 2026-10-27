@@ -66,32 +66,91 @@ class AIGuardLoop:
         self._detector = None  # 延迟初始化（可能在子线程加载模型）
         self._init_error: Optional[str] = None
 
+        # 可观测性（P3-7）：让 /healthz 与日志能证明检测器真的在跑
+        self._last_check_at: Optional[str] = None
+        self._last_check_summary: str = ""
+        self._checks = 0
+        self._inferences = 0
+
         # 每台打印机上次报警时间戳（冷却用）
         self._last_alarm_ts: dict[str, float] = {}
 
-    async def start(self):
-        """启动后台检测任务"""
+    async def start(self, background: bool = False):
+        """启动后台检测任务
+
+        Args:
+            background: True 时不等待模型加载，先返回让 Web 服务可用，
+                        模型在后台线程加载完成后再开始检测（P3-10）。
+        """
         if not self._cfg.enabled:
             logger.info("AI 异常报警已禁用")
             return
 
-        # 尝试初始化检测器（在子线程中加载模型，避免阻塞事件循环）
+        if background:
+            self._running = True
+            self._task = asyncio.create_task(self._background_main())
+            logger.info("AI 异常报警正在后台加载检测器（不阻塞面板启动）")
+            return
+
+        # 兼容旧行为：同步加载完成后再返回（测试/脚本使用）
+        if await self._init_and_log():
+            self._running = True
+            self._task = asyncio.create_task(self._loop())
+
+    async def _background_main(self):
+        """后台初始化 + 主循环"""
+        if not await self._init_and_log():
+            self._running = False
+            return
+        if not self._running:  # 初始化期间被 stop()
+            return
+        await self._loop()
+
+    async def _init_and_log(self) -> bool:
+        """加载检测器并打印真实图库信息；失败时返回 False（优雅降级）"""
         try:
             await self._init_detector()
         except Exception as e:
             self._init_error = str(e)
             logger.warning("AI 异常报警初始化失败，功能已禁用: %s", e)
-            return
+            return False
 
-        self._running = True
-        self._task = asyncio.create_task(self._loop())
+        gallery = {}
+        if self._detector is not None and hasattr(self._detector, "stats"):
+            try:
+                gallery = self._detector.stats()
+            except Exception as e:  # pragma: no cover - stats 仅用于日志
+                logger.debug("读取图库统计失败: %s", e)
         logger.info(
-            "AI 异常报警已启动: 模型=%s track=%s 阈值=%.2f 间隔=%ds 帧数=%d 报警帧=%d 冷却=%ds",
-            self._cfg.model, self._cfg.track,
+            "AI 异常报警已启动: 检测器=DINOv2+kNN(k=%s) 图库 normal=%s/anomaly=%s "
+            "阈值=%.2f 间隔=%ds 帧数=%d 报警帧=%d 冷却=%ds",
+            gallery.get("k", getattr(self._detector, "k", "?")),
+            gallery.get("n_normal", "?"), gallery.get("n_anomaly", "?"),
             self._detector.threshold if self._detector else 0,
             self._cfg.interval, self._cfg.frames_per_check,
             self._cfg.alert_frames, self._cfg.cooldown,
         )
+        return True
+
+    def status(self) -> dict:
+        """运行状态快照（供 /healthz 与页面展示）"""
+        gallery = {}
+        if self._detector is not None and hasattr(self._detector, "stats"):
+            try:
+                gallery = self._detector.stats()
+            except Exception:
+                gallery = {}
+        return {
+            "enabled": self._cfg.enabled,
+            "available": self.is_available,
+            "init_error": self._init_error,
+            "threshold": self.threshold,
+            "last_check_at": self._last_check_at,
+            "last_check_summary": self._last_check_summary,
+            "checks": self._checks,
+            "inferences": self._inferences,
+            "gallery": gallery,
+        }
 
     def stop(self):
         """停止后台任务"""
@@ -169,6 +228,7 @@ class AIGuardLoop:
         if not self.is_available:
             raise RuntimeError("AI detector not available")
         result = await asyncio.to_thread(self._detector.detect, frame)
+        self._inferences += 1
         d = result.to_dict()
         # 保存图片
         self._save_frame(frame, result.probability, serial)
@@ -204,7 +264,6 @@ class AIGuardLoop:
         """在子线程中初始化检测器（模型加载约 2-3 秒）"""
         def _load():
             import sys
-            from pathlib import Path
             deploy = self._resolve_deploy_dir()
             if deploy is None:
                 raise FileNotFoundError(
@@ -213,13 +272,10 @@ class AIGuardLoop:
                     "ai_guard.deploy_dir 或环境变量 BUMBO_AI_DEPLOY_DIR 中指定路径"
                 )
             deploy_dir = str(deploy)
-            # 将 bambu_ai_deploy_dinoknn 目录加入 sys.path
+            # deploy 目录自带 extractor/knn/dino_knn，无需再挂源码仓库的
+            # bambu_AI/baselines/scripts（发布包中不存在，P3 清理）
             if deploy_dir not in sys.path:
                 sys.path.insert(0, deploy_dir)
-            # dino_knn.py 在 baselines/scripts 下, 也是 detector 内部依赖
-            dino_knn_dir = str(deploy.parent.parent / "bambu_AI" / "baselines" / "scripts")
-            if Path(dino_knn_dir).exists() and dino_knn_dir not in sys.path:
-                sys.path.insert(0, dino_knn_dir)
             from detector import PrintDefectDetector
 
             threshold = self._cfg.threshold if self._cfg.threshold > 0 else None
@@ -268,6 +324,7 @@ class AIGuardLoop:
         if not self._detector:
             return
 
+        self._last_check_at = datetime.now().isoformat(timespec="seconds")
         statuses = self._manager.get_all_statuses()
         running_printers = [
             (serial, st) for serial, st in statuses.items()
@@ -275,24 +332,33 @@ class AIGuardLoop:
         ]
 
         if not running_printers:
+            self._checks += 1
+            self._last_check_summary = "无 RUNNING 打印机"
+            logger.info("AI 检测: 当前无 RUNNING 打印机，跳过本轮")
             return
 
-        logger.debug("AI 检测开始: %d 台 RUNNING 打印机", len(running_printers))
+        logger.info("AI 检测开始: %d 台 RUNNING 打印机", len(running_printers))
 
+        checked = 0
         for serial, status in running_printers:
             if not self._running:
                 break
             # 检查冷却
             last_ts = self._last_alarm_ts.get(serial, 0)
             if time.time() - last_ts < self._cfg.cooldown:
+                logger.debug("AI 检测跳过 %s: 报警冷却中", serial)
                 continue
             # 检查摄像头支持
             if not self._camera.is_supported(serial):
+                logger.debug("AI 检测跳过 %s: 未配置摄像头", serial)
                 continue
 
             await self._check_printer(serial, status)
+            checked += 1
 
-        logger.debug("AI 检测完成")
+        self._checks += 1
+        self._last_check_summary = f"检查 {checked}/{len(running_printers)} 台 RUNNING 打印机"
+        logger.info("AI 检测完成: %s", self._last_check_summary)
 
     async def _check_printer(self, serial: str, status):
         """对单台打印机执行连续帧检测
@@ -352,6 +418,15 @@ class AIGuardLoop:
         # 循环结束后统一保存（避免报警时帧被保存两次）
         if not all_frames:
             return
+
+        # P3-7：每台打印机每轮打一条 INFO，证明推理真的在跑（默认日志级别可见）
+        self._inferences += len(all_frames)
+        logger.info(
+            "AI 检测 %s(%s): %d 帧 最高异常概率=%.3f 阈值=%.2f%s",
+            printer_name, serial, len(all_probs), max(all_probs),
+            self._detector.threshold or 0.0,
+            " → 报警" if triggered_alert else " → 正常",
+        )
 
         if triggered_alert:
             # 报警：所有帧一起保存到 alerts_review 单一子目录

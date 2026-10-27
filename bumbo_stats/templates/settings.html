@@ -38,7 +38,31 @@
                         </select>
                     </div>
                 </div>
-                <p class="form-hint">⚠️ 修改账号后需要重启服务才能生效</p>
+                <p class="form-hint">⚠️ 修改账号后需要重启服务才能生效；也可以直接用下方「网页登录」即时生效。</p>
+            </div>
+            <div class="settings-card">
+                <div class="settings-card-title">🔐 网页登录拓竹云</div>
+                <p class="form-hint">账号密码仅用于换取 Token，不会保存到配置。中国区：手机号 + 短信验证码；全球区：邮箱 + 邮件验证码。</p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>账号（手机号 / 邮箱）</label>
+                        <input id="cloud-account" autocomplete="username" placeholder="手机号或邮箱">
+                    </div>
+                    <div class="form-group">
+                        <label>密码</label>
+                        <input id="cloud-password" type="password" autocomplete="current-password" placeholder="拓竹云密码">
+                    </div>
+                </div>
+                <div class="form-row" id="cloud-code-row" style="display:none">
+                    <div class="form-group">
+                        <label>验证码</label>
+                        <input id="cloud-code" inputmode="numeric" placeholder="短信 / 邮件 / MFA 验证码">
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button type="button" class="btn-primary" id="btn-cloud-login">🔐 登录拓竹云</button>
+                    <button type="button" class="btn-secondary" id="btn-cloud-verify" style="display:none">✅ 提交验证码</button>
+                </div>
             </div>
             <div class="btn-group">
                 <button type="submit" class="btn-primary">💾 保存配置</button>
@@ -179,9 +203,36 @@
                 </div>
                 <div class="form-row">
                     <div class="form-group">
-                        <label>群聊 Chat ID</label>
-                        <input name="chatid" value="{{ config.feishu.chatid }}" placeholder="飞书群聊 Chat ID">
+                        <label>群聊 Chat ID
+                            <button type="button" class="btn-secondary btn-small" id="btn-feishu-chats">🔍 获取群聊</button>
+                        </label>
+                        <input name="chatid" value="{{ config.feishu.chatid }}" placeholder="飞书群聊 Chat ID (oc_...)">
+                        <div id="feishu-chat-list" class="form-hint"></div>
+                        <p class="form-hint">需先在飞书群设置中把应用/机器人加入群聊，并开通 im:chat 读权限。</p>
                     </div>
+                </div>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">🚨 应用内加急（可选）</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>加急用户 open_id（多个用英文逗号分隔）</label>
+                        <input name="urgent_user_id" value="{{ config.feishu.urgent_user_id }}" placeholder="ou_xxx,ou_yyy">
+                    </div>
+                    <div class="form-group">
+                        <label>每小时上限（0 = 不限）</label>
+                        <input name="urgent_max_per_hour" type="number" min="0" value="{{ config.feishu.urgent_max_per_hour }}">
+                    </div>
+                </div>
+                <div class="checkbox-group">
+                    <span class="form-hint">触发加急的事件：</span>
+                    {% set urgent_events = config.feishu.urgent_on_events or [] %}
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="layer3" {% if 'layer3' in urgent_events %}checked{% endif %}> 第 3 层</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="progress50" {% if 'progress50' in urgent_events %}checked{% endif %}> 进度 50%</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="completed" {% if 'completed' in urgent_events %}checked{% endif %}> 打印完成</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="error" {% if 'error' in urgent_events %}checked{% endif %}> HMS 错误</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="ai_alarm" {% if 'ai_alarm' in urgent_events %}checked{% endif %}> AI 异常</label>
                 </div>
             </div>
 
@@ -235,7 +286,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/dashboard.js"></script>
+<script src="/static/js/dashboard.js?v={{ asset_ver }}"></script>
 <script>
 // Tab 切换
 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -284,6 +335,119 @@ document.getElementById('cloud-form').addEventListener('submit', async e => {
     await submitForm('/api/settings/cloud', Object.fromEntries(fd));
 });
 
+// 网页登录拓竹云（P1-1：无需重启/终端交互）
+function cloudRegion() {
+    const sel = document.querySelector('#cloud-form [name="mqtt_broker"]');
+    return sel ? sel.value : 'cn';
+}
+document.getElementById('btn-cloud-login')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-cloud-login');
+    const account = document.getElementById('cloud-account').value.trim();
+    const password = document.getElementById('cloud-password').value;
+    if (!account || !password) {
+        showMsg('请填写拓竹云账号和密码', true);
+        return;
+    }
+    btn.disabled = true;
+    btn.textContent = '登录中...';
+    try {
+        const resp = await fetch('/api/settings/cloud/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({account, password, region: cloudRegion()}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showMsg('登录失败: ' + (data.detail || '未知错误'), true);
+        } else if (data.need_code) {
+            document.getElementById('cloud-code-row').style.display = '';
+            document.getElementById('btn-cloud-verify').style.display = '';
+            showMsg(data.hint || '请输入验证码', false);
+            document.getElementById('cloud-code').focus();
+        } else {
+            showMsg('登录成功，正在连接拓竹云...', false);
+            setTimeout(() => location.reload(), 1200);
+        }
+    } catch (err) {
+        showMsg('登录失败: ' + err.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔐 登录拓竹云';
+    }
+});
+document.getElementById('btn-cloud-verify')?.addEventListener('click', async () => {
+    const code = document.getElementById('cloud-code').value.trim();
+    if (!code) {
+        showMsg('请输入验证码', true);
+        return;
+    }
+    const btn = document.getElementById('btn-cloud-verify');
+    btn.disabled = true;
+    btn.textContent = '验证中...';
+    try {
+        const resp = await fetch('/api/settings/cloud/verify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({code}),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            showMsg('登录成功，正在连接拓竹云...', false);
+            setTimeout(() => location.reload(), 1200);
+        } else {
+            showMsg('验证失败: ' + (data.detail || '未知错误'), true);
+        }
+    } catch (err) {
+        showMsg('验证失败: ' + err.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '✅ 提交验证码';
+    }
+});
+
+// 飞书：用当前表单里的凭据列出所在群聊（P2-15）
+document.getElementById('btn-feishu-chats')?.addEventListener('click', async () => {
+    const form = document.getElementById('feishu-form');
+    const fd = new FormData(form);
+    const box = document.getElementById('feishu-chat-list');
+    const btn = document.getElementById('btn-feishu-chats');
+    btn.disabled = true;
+    btn.textContent = '获取中...';
+    try {
+        const resp = await fetch('/api/settings/feishu/chats', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                app_id: fd.get('app_id') || '',
+                app_secret: fd.get('app_secret') || '',
+            }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            box.textContent = '获取失败: ' + (data.detail || '未知错误');
+            return;
+        }
+        if (!data.chats || data.chats.length === 0) {
+            box.textContent = '未找到群聊：请先把应用/机器人加入群聊。';
+            return;
+        }
+        box.innerHTML = '点击填入：' + data.chats.map(c =>
+            `<button type="button" class="btn-secondary btn-small feishu-chat-pick" data-chat-id="${c.chat_id}">${c.name || c.chat_id}</button>`
+        ).join(' ');
+        box.querySelectorAll('.feishu-chat-pick').forEach(el => {
+            el.addEventListener('click', () => {
+                form.querySelector('[name="chatid"]').value = el.dataset.chatId;
+                showMsg('已填入 chatid，记得保存配置', false);
+            });
+        });
+    } catch (err) {
+        box.textContent = '获取失败: ' + err.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 获取群聊';
+    }
+});
+
 // 企业微信
 document.getElementById('wecom-form').addEventListener('submit', async e => {
     e.preventDefault();
@@ -313,6 +477,9 @@ document.getElementById('feishu-form').addEventListener('submit', async e => {
         progress50: fd.has('progress50'),
         completed: fd.has('completed'),
         error: fd.has('error'),
+        urgent_user_id: fd.get('urgent_user_id') || '',
+        urgent_on_events: fd.getAll('urgent_on_events'),
+        urgent_max_per_hour: Number(fd.get('urgent_max_per_hour') || 10),
     });
 });
 

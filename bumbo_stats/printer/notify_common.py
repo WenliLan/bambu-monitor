@@ -227,6 +227,12 @@ class CommandCooldown:
         self._last_ts[cmd] = now
         return True
 
+    def remaining(self, cmd: str) -> float:
+        """距离下次可触发还需等待的秒数（0 表示已可触发）"""
+        cooldown = COMMAND_COOLDOWN.get(cmd, 5.0)
+        elapsed = time.time() - self._last_ts.get(cmd, 0.0)
+        return max(0.0, cooldown - elapsed)
+
 
 # ----------------------------------------------------------------------
 # 阈值指令（chatid + ai_guard 由调用方注入）
@@ -277,7 +283,7 @@ def build_threshold_message(
         msg += (
             f"_（输入 {numeric_value} 超出 0~1 范围，已自动截断为 {current:.2f}）_\n"
         )
-    msg += f"\n_注: 已持久化到 printers.yaml，重启服务后仍然生效_\n"
+    msg += "\n_注: 已持久化到 printers.yaml，重启服务后仍然生效_\n"
     if dashboard_url:
         msg += f"\n[打开监控面板]({dashboard_url})"
     return msg

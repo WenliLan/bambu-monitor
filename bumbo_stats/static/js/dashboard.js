@@ -53,9 +53,46 @@ function setWsStatus(connected) {
 
 function updateAllPrinters(data) {
     for (const [serial, status] of Object.entries(data)) {
+        // 运行中新增的打印机不会出现在本页已渲染的 DOM 里：提示用户刷新，
+        // 而不是让这台机器的卡片/提示音永远静默（P2-19）
+        maybeShowUnknownPrinterBanner(serial);
         updatePrinterCard(serial, status);
         updateCameraBadge(serial, status.state);
+        // 提示音与 DOM 更新解耦：即使卡片尚未渲染（新增打印机未刷新页面），
+        // 也能根据数据层状态变化正常提醒（P2-19）
+        maybeChimeStateChange(serial, status.state);
     }
+}
+
+let _unknownPrinterBanner = null;
+
+/**
+ * 当前页面没有该 serial 的卡片时，在右下角提示刷新。
+ * 只提示一次，避免每 30 秒状态批次重复插入。
+ */
+function maybeShowUnknownPrinterBanner(serial) {
+    if (_unknownPrinterBanner) return;
+    const hasBadge = document.getElementById(`state-badge-${serial}`);
+    const hasCard = document.querySelector(
+        `.camera-card[data-serial="${CSS.escape(serial)}"]`
+    );
+    if (hasBadge || hasCard) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'unknown-printer-banner';
+    banner.className = 'unknown-printer-banner';
+
+    const text = document.createElement('span');
+    text.textContent = '检测到新增打印机，当前页面尚未渲染其卡片。';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = '刷新页面';
+    button.addEventListener('click', () => location.reload());
+
+    banner.append(text, button);
+    document.body.appendChild(banner);
+    _unknownPrinterBanner = banner;
 }
 
 function updatePrinterCard(serial, s) {
@@ -118,21 +155,30 @@ function updateCameraBadge(serial, state) {
     if (overlay) {
         overlay.classList.toggle('camera-state-center', state.toLowerCase() !== 'running');
     }
-
-    // 状态变化提示音：用于提醒打印完成/异常。两条静音规则：
-    // 1. 首次看到该 serial 只记录不鸣响，避免刷新页面时成排“叮”声；
-    // 2. 变到 running 不鸣响——开始打印不需要提醒，只有离开 running
-    //    （完成/暂停/失败等）才是需要用户关注的变化。
-    const prev = lastPrinterStates[serial];
-    if (prev !== undefined && prev !== state && state.toLowerCase() !== 'running') {
-        playStateChime();
-    }
-    lastPrinterStates[serial] = state;
 }
 
 /* ===== 状态变化提示音（跨浏览器/移动端兼容） ===== */
 
 const lastPrinterStates = {};
+// 只在“打印中 → 需要关注”的转换时鸣响；IDLE/UNKNOWN 等中间态不重复提醒
+const CHIME_FROM = 'RUNNING';
+const CHIME_TO = new Set(['PAUSE', 'FINISH', 'FAILED', 'OFFLINE']);
+
+function maybeChimeStateChange(serial, state) {
+    if (!state) return;
+    const normalized = String(state).toUpperCase();
+    // UNKNOWN 是云端断流/重启首包的占位态：透传，不覆盖上一次真实状态，
+    // 避免 RUNNING → UNKNOWN → FINISH 连响两次（P2-19）
+    if (normalized === 'UNKNOWN') return;
+    const prev = lastPrinterStates[serial];
+    lastPrinterStates[serial] = normalized;
+    if (prev === undefined) return;  // 首次看到只记录，刷新页面不鸣响
+    if (prev === CHIME_FROM && CHIME_TO.has(normalized)) {
+        playStateChime();
+    }
+}
+
+/* ===== 提示音实现 ===== */
 let _audioCtx = null;
 let _chimeAudio = null;
 

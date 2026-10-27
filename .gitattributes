@@ -9,3 +9,10 @@ tests/ export-ignore
 bambu_stats/printer/AGENTS.md export-ignore
 # 维护者脚本（自含扫描正则，打入包内会误报）
 build_release.ps1 export-ignore
+
+# 行尾约束（P2-20）：批处理/PowerShell 必须是 CRLF。
+# 否则 Windows cmd 按字节读行时会把中文尾字节与 LF 粘连，
+# 导致计划任务 LastTaskResult=255、服务端口不监听且无日志。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

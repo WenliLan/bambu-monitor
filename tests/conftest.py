@@ -2,21 +2,8 @@
 
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
-
-# ========== 关键：mock bambu-lab-cloud-api（未安装时需要）==========
-try:
-    import bambulab  # noqa: F401
-except ImportError:
-    # 创建 mock 模块，使 import 不报错
-    mock_module = MagicMock()
-    mock_module.MQTTClient = MagicMock
-    mock_module.BambuClient = MagicMock
-    mock_module.BambuAuthenticator = MagicMock
-    mock_module.JPEGFrameStream = MagicMock
-    sys.modules["bambulab"] = mock_module
 
 # 将项目根目录加入 sys.path
 PROJECT_ROOT = Path(__file__).parent.parent

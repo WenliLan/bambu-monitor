@@ -86,13 +86,13 @@ class CameraManager:
 
         if _tcp_reachable(config.ip, 6000):
             self._protocol[serial] = PROTO_JPEG
-            logger.info("摄像头协议探测: %s -> JPEG(TCP 6000)", serial[-6:])
+            logger.info("摄像头协议探测: %s(%s) -> JPEG(TCP 6000)", config.name, serial)
             return PROTO_JPEG
         if _tcp_reachable(config.ip, 322):
             # RTSPS 需要 ffmpeg；不可用时不缓存，便于对方装好 ffmpeg 后自动启用
             if find_ffmpeg():
                 self._protocol[serial] = PROTO_RTSPS
-                logger.info("摄像头协议探测: %s -> RTSPS(322, ffmpeg)", serial[-6:])
+                logger.info("摄像头协议探测: %s(%s) -> RTSPS(322, ffmpeg)", config.name, serial)
                 return PROTO_RTSPS
             return None
         return None
@@ -102,7 +102,7 @@ class CameraManager:
         proto = self._detect_protocol(config)
         if proto == PROTO_JPEG:
             def _get():
-                from bambulab import JPEGFrameStream
+                from .jpegstream import JPEGFrameStream
                 with JPEGFrameStream(config.ip, config.access_code) as stream:
                     return stream.get_frame()
             return await asyncio.to_thread(_get)

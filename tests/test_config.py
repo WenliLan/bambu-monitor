@@ -11,6 +11,9 @@
 """
 
 import pytest
+import yaml
+from pathlib import Path
+
 from bumbo_stats.config import (
     CloudConfig,
     PrinterConfig,
@@ -51,9 +54,9 @@ class TestLoadConfig:
         assert len(config.printers) == 1
         assert config.printers[0].name == "TestPrinter"
         assert config.printers[0].serial == "TEST001"
-        # 默认值
+        # 默认值（P2-14：默认只监听回环地址，需局域网访问时显式 --host 0.0.0.0）
         assert config.settings.camera_interval == 3
-        assert config.settings.host == "0.0.0.0"
+        assert config.settings.host == "127.0.0.1"
         assert config.settings.port == 8000
 
     def test_tc_cfg_03_file_not_found(self):
@@ -96,10 +99,10 @@ class TestModels:
         assert pc2.location == "A区"
 
     def test_tc_cfg_07_app_settings_defaults(self):
-        """TC-CFG-07: AppSettings 默认值正确"""
+        """TC-CFG-07: AppSettings 默认值正确（含 P2-14 回环监听默认值）"""
         s = AppSettings()
         assert s.camera_interval == 3
-        assert s.host == "0.0.0.0"
+        assert s.host == "127.0.0.1"
         assert s.port == 8000
         assert "./data/" in s.db_path
 
@@ -128,3 +131,55 @@ class TestEnvOverrides:
         monkeypatch.delenv("BUMBO_WECOM_SECRET", raising=False)
         config = load_config(sample_config_yaml)
         assert config.wecom.secret != "env-secret-xyz"
+
+
+class TestSaveYaml:
+    """配置写回：分段保存 + 原子替换 + 备份（P2-12）"""
+
+    def test_tc_cfg_11_section_save_preserves_other_sections(
+        self, sample_config_yaml
+    ):
+        """TC-CFG-11: 只写回指定段，磁盘上其它段与未知键保持不变"""
+        path = Path(sample_config_yaml)
+        # 模拟用户在磁盘上手工补充的注释性自定义段
+        path.write_text(
+            path.read_text(encoding="utf-8") + "custom:\n  note: keep-me\n",
+            encoding="utf-8",
+        )
+
+        config = load_config(sample_config_yaml)
+        config.wecom.bot_id = "bot-new"
+        config.save_yaml(sections=["wecom"])
+
+        on_disk = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert on_disk["wecom"]["bot_id"] == "bot-new"
+        assert on_disk["cloud"]["username"] == "test@email.com"
+        assert len(on_disk["printers"]) == 2
+        assert on_disk["settings"]["port"] == 8000
+        assert on_disk["custom"]["note"] == "keep-me"
+
+        # 原文件保留为 .bak
+        assert Path(str(path) + ".bak").exists()
+
+    def test_tc_cfg_12_full_save_without_sections(self, sample_config_yaml):
+        """TC-CFG-12: 未指定 sections 时全量写回，且可被重新加载"""
+        config = load_config(sample_config_yaml)
+        config.settings.port = 9001
+        config.save_yaml()
+
+        reloaded = load_config(sample_config_yaml)
+        assert reloaded.settings.port == 9001
+        assert len(reloaded.printers) == 2
+
+    def test_tc_cfg_13_section_save_creates_missing_file(self, tmp_path):
+        """TC-CFG-13: 目标文件尚不存在时分段保存仍能创建完整文件"""
+        target = tmp_path / "new.yaml"
+        config = AppConfig(
+            cloud=CloudConfig(username="u@test.com"),
+            printers=[PrinterConfig(serial="S001", name="P1")],
+        )
+        config.save_yaml(str(target), sections=["printers"])
+
+        on_disk = yaml.safe_load(target.read_text(encoding="utf-8"))
+        assert on_disk["printers"][0]["serial"] == "S001"
+        assert on_disk["cloud"]["username"] == "u@test.com"

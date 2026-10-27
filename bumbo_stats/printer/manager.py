@@ -5,8 +5,10 @@ import logging
 from datetime import datetime
 from typing import Callable, Awaitable, Optional
 
+from ..cloud_api import broker_for_region
 from ..config import PrinterConfig
 from ..models import PrinterState, PrinterStatus, HMSError
+from .mqtt_cloud import CloudMQTTClient
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +36,7 @@ class PrinterManager:
         on_status_change: Optional[StatusChangeFn] = None,
     ):
         self._configs = {c.serial: c for c in configs}
-        self._mqtt_clients: dict = {}  # serial -> MQTTClient
+        self._mqtt_clients: dict[str, CloudMQTTClient] = {}
         self._status_cache: dict[str, PrinterStatus] = {}
         self._print_data_cache: dict[str, dict] = {}  # serial -> 最后收到的 print 数据（用于合并）
         self._on_status_change = on_status_change
@@ -70,21 +72,8 @@ class PrinterManager:
 
         # 如果已有 MQTT 连接，建立新连接
         if self._uid and self._token:
-            from bambulab import MQTTClient
-            if self._region == "china":
-                MQTTClient.BROKER = "cn.mqtt.bambulab.com"
-            else:
-                MQTTClient.BROKER = "us.mqtt.bambulab.com"
             try:
-                mqtt = MQTTClient(
-                    username=self._uid,
-                    access_token=self._token,
-                    device_id=config.serial,
-                    on_message=self._make_callback(config.serial),
-                )
-                await asyncio.to_thread(mqtt.connect, blocking=False)
-                self._mqtt_clients[config.serial] = mqtt
-                await asyncio.to_thread(mqtt.request_full_status)
+                await self._connect_one(config)
                 logger.info("MQTT 已连接: %s", config.serial)
             except Exception as e:
                 logger.error("MQTT 连接失败 %s: %s", config.serial, e)
@@ -112,6 +101,28 @@ class PrinterManager:
         self._print_data_cache.pop(serial, None)
         logger.info("已移除打印机: %s", serial)
 
+    def _create_client(self, config: PrinterConfig) -> CloudMQTTClient:
+        """为单台打印机构造云端 MQTT 客户端（client_id 每次唯一）"""
+        return CloudMQTTClient(
+            username=self._uid,
+            access_token=self._token,
+            device_id=config.serial,
+            on_message=self._make_callback(config.serial),
+            broker=broker_for_region(self._region),
+        )
+
+    async def _connect_one(self, config: PrinterConfig) -> CloudMQTTClient:
+        """连接一台打印机并请求完整状态；失败时抛出异常
+
+        connect() 会等待 CONNACK，确保返回时确实可以收发消息
+        （v0.5.17 的旧实现立即返回，导致 pushall 静默丢失）。
+        """
+        mqtt = self._create_client(config)
+        await asyncio.to_thread(mqtt.connect, False)
+        self._mqtt_clients[config.serial] = mqtt
+        await asyncio.to_thread(mqtt.request_full_status)
+        return mqtt
+
     async def connect_all(self, uid: str, token: str, region: str = "global"):
         """连接所有打印机的云端 MQTT
 
@@ -120,38 +131,22 @@ class PrinterManager:
             token: 访问 token
             region: API 区域 "global" 或 "china"
         """
-        from bambulab import MQTTClient
-
         self._uid = uid
         self._token = token
         self._region = region
         self._loop = asyncio.get_running_loop()
 
-        # 设置正确的 MQTT broker（中国区用 cn，全球区用 us）
-        if region == "china":
-            MQTTClient.BROKER = "cn.mqtt.bambulab.com"
-        else:
-            MQTTClient.BROKER = "us.mqtt.bambulab.com"
-
-        for serial, config in self._configs.items():
+        for config in self._configs.values():
             try:
-                mqtt = MQTTClient(
-                    username=uid,
-                    access_token=token,
-                    device_id=serial,
-                    on_message=self._make_callback(serial),
-                )
-                await asyncio.to_thread(mqtt.connect, blocking=False)
-                self._mqtt_clients[serial] = mqtt
-                # 发送 pushall 请求获取完整状态（包含 layer_num, mc_percent 等）
-                await asyncio.to_thread(mqtt.request_full_status)
-                logger.info("MQTT 已连接并请求完整状态: %s (%s)", config.name, serial)
+                await self._connect_one(config)
+                logger.info("MQTT 已连接并请求完整状态: %s (%s)", config.name, config.serial)
             except Exception as e:
-                logger.error("MQTT 连接失败 %s: %s", config.name, e)
-        
-        # 启动定时 pushall 任务（每 60 秒获取完整状态）
-        self._pushall_task = asyncio.create_task(self._periodic_pushall())
-        logger.info("定时 pushall 任务已启动")
+                logger.error("MQTT 连接失败 %s (%s): %s", config.name, config.serial, e)
+
+        # 启动定时 pushall 任务（每 30 秒获取完整状态）；重复连接时复用
+        if self._pushall_task is None or self._pushall_task.done():
+            self._pushall_task = asyncio.create_task(self._periodic_pushall())
+            logger.info("定时 pushall 任务已启动")
 
     async def disconnect_all(self):
         """断开所有打印机的 MQTT 连接"""
@@ -160,7 +155,7 @@ class PrinterManager:
             self._pushall_task.cancel()
             self._pushall_task = None
         
-        for serial, mqtt in self._mqtt_clients.items():
+        for serial, mqtt in list(self._mqtt_clients.items()):
             try:
                 await asyncio.to_thread(mqtt.disconnect)
                 logger.info("MQTT 已断开: %s", serial)
@@ -172,10 +167,12 @@ class PrinterManager:
         """定时发送 pushall 请求获取完整状态（每 30 秒）"""
         while True:
             await asyncio.sleep(30)  # 每 30 秒请求一次完整状态
-            for serial, mqtt in self._mqtt_clients.items():
+            for serial, mqtt in list(self._mqtt_clients.items()):
+                if not mqtt.connected:
+                    # paho 会在后台自动重连，这里不主动重建，避免 client_id 抖动
+                    continue
                 try:
                     await asyncio.to_thread(mqtt.request_full_status)
-                    # 显示实际状态信息
                     status = self._status_cache.get(serial)
                     if status:
                         logger.info(
@@ -187,31 +184,39 @@ class PrinterManager:
                     logger.warning("定时 pushall 失败 %s: %s", serial, e)
 
     async def reconnect_all(self):
-        """检查并重连断开的 MQTT 客户端"""
-        from bambulab import MQTTClient
+        """为尚未建立连接的打印机补建 MQTT 连接
 
-        # 重新设置 broker（以防万一）
-        if self._region == "china":
-            MQTTClient.BROKER = "cn.mqtt.bambulab.com"
-        else:
-            MQTTClient.BROKER = "us.mqtt.bambulab.com"
+        已存在的连接由 paho 网络线程自动重连（reconnect_delay_set），
+        这里只处理首次连接失败 / 运行时新加的设备，避免重复 client。
+        """
+        if not (self._uid and self._token):
+            return
+        for config in self._configs.values():
+            if config.serial in self._mqtt_clients:
+                continue
+            try:
+                await self._connect_one(config)
+                # 重连后也要发送 pushall 请求获取完整状态
+                logger.info("MQTT 重连成功并请求完整状态: %s", config.name)
+            except Exception as e:
+                logger.warning("MQTT 重连失败 %s: %s", config.name, e)
 
+    def cloud_status(self) -> dict[str, dict]:
+        """云端连接可观测信息（供 /healthz 与前端状态展示）"""
+        result = {}
         for serial, config in self._configs.items():
-            if serial not in self._mqtt_clients:
-                try:
-                    mqtt = MQTTClient(
-                        username=self._uid,
-                        access_token=self._token,
-                        device_id=serial,
-                        on_message=self._make_callback(serial),
-                    )
-                    await asyncio.to_thread(mqtt.connect, blocking=False)
-                    self._mqtt_clients[serial] = mqtt
-                    # 重连后也要发送 pushall 请求获取完整状态
-                    await asyncio.to_thread(mqtt.request_full_status)
-                    logger.info("MQTT 重连成功并请求完整状态: %s", config.name)
-                except Exception as e:
-                    logger.warning("MQTT 重连失败 %s: %s", config.name, e)
+            mqtt = self._mqtt_clients.get(serial)
+            result[serial] = {
+                "name": config.name,
+                "connected": bool(mqtt and mqtt.connected),
+                "messages": mqtt.message_count if mqtt else 0,
+                "last_message_age": (
+                    round(mqtt.last_message_age(), 1)
+                    if mqtt and mqtt.last_message_age() is not None
+                    else None
+                ),
+            }
+        return result
 
     def get_status(self, serial: str) -> PrinterStatus:
         """获取单台打印机状态（从缓存）
@@ -282,6 +287,26 @@ class PrinterManager:
             # 解析 MQTT 推送数据（使用合并后的数据）
             ams_data = data.get("ams")
             status = self._parse_status(serial, config.name, parse_data, ams_data)
+
+            # 打印中但首包/残缺包没有层数信息时（P3-12: 重启后 0/0 · 0%），
+            # 沿用上一份有效进度，避免把"待同步"当成真实进度广播给前端
+            previous = self._status_cache.get(serial)
+            if (
+                status.state == PrinterState.RUNNING
+                and status.total_layers == 0
+                and previous is not None
+                and previous.total_layers > 0
+            ):
+                status.total_layers = previous.total_layers
+                if status.current_layer <= 0:
+                    status.current_layer = previous.current_layer
+                if status.progress <= 0:
+                    status.progress = previous.progress
+                if status.remaining_time <= 0:
+                    status.remaining_time = previous.remaining_time
+                if not status.gcode_file:
+                    status.gcode_file = previous.gcode_file
+
             self._status_cache[serial] = status
 
             # 触发异步回调（线程安全地调度到 asyncio 事件循环）

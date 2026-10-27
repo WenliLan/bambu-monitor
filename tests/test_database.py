@@ -27,9 +27,8 @@
 import pytest
 import aiosqlite
 from datetime import date, datetime, timedelta
-from unittest.mock import patch
 
-from bumbo_stats.database import Database, SECONDS_PER_DAY
+from bumbo_stats.database import SECONDS_PER_DAY
 
 
 @pytest.mark.asyncio
@@ -213,7 +212,6 @@ class TestSessions:
         serial = "AC12309BH109"
         today = datetime.now().date()
         yesterday = today - timedelta(days=1)
-        now = datetime.now()
         # 插入昨天的 completed 任务
         async with aiosqlite.connect(db.db_path) as conn:
             await conn.execute("""

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from datetime import date
-from typing import Callable, Awaitable, Optional
+from typing import Callable, Awaitable
 
 from ..database import Database
 from ..models import PrinterState, PrinterStatus

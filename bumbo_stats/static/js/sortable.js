@@ -20,7 +20,26 @@
  */
 
 const SORT_STORAGE_KEY = 'bumbo_printer_order_v1';
-const GRID_COLS = 3;  // 与 dashboard.css 中 grid-template-columns: repeat(3, 1fr) 保持一致
+
+/* 列数唯一来源（P3-14）
+ * - CSS 只消费 --camera-cols，不再硬编码 repeat(3,...)，媒体查询也不覆盖列模板；
+ * - JS 的拖拽落点、位置锁定、旧格式迁移全部读取同一个 GRID_COLS 运行时值；
+ * - 窄屏阈值只在这里出现一次。 */
+const MOBILE_MAX_WIDTH = 768;
+const DESKTOP_GRID_COLS = 3;
+let GRID_COLS = DESKTOP_GRID_COLS;
+
+/**
+ * 按当前视口刷新列数并写入 CSS 变量。
+ * @returns {number} 当前列数
+ */
+function refreshGridCols() {
+    const grid = document.getElementById('camera-grid');
+    const cols = window.innerWidth <= MOBILE_MAX_WIDTH ? 1 : DESKTOP_GRID_COLS;
+    GRID_COLS = cols;
+    if (grid) grid.style.setProperty('--camera-cols', String(cols));
+    return cols;
+}
 
 /* ===== 工具函数 ===== */
 
@@ -257,10 +276,24 @@ function applySavedOrder() {
     const grid = document.getElementById('camera-grid');
     if (!grid) return;
 
+    // 列数先于任何位置计算确定（唯一来源，P3-14）
+    refreshGridCols();
+
     try {
         // saved 为 null 表示无偏好；为 {serial: [row, col]} 表示有“位置”偏好。
         const saved = loadSavedOrder();
         const cards = Array.from(grid.querySelectorAll('.camera-card'));
+
+        // 窄屏单列：不锁定行列，交给 CSS 自然排列。否则 saved 里的第 2/3 列
+        // 会在这张 1 列网格里生成隐式列，把首列压成 2px（P3-14 实测缺陷）。
+        if (GRID_COLS === 1) {
+            cards.forEach(card => {
+                card.style.gridRow = '';
+                card.style.gridColumn = '';
+            });
+            syncPrinterCards(grid);
+            return;
+        }
 
         if (!saved || Object.keys(saved).length === 0) {
             // 无偏好：按 DOM 顺序紧凑填充。不创建任何空格。
@@ -286,7 +319,9 @@ function applySavedOrder() {
                 Number.isFinite(pos[0]) && Number.isFinite(pos[1])) {
                 const row = Math.floor(pos[0]);
                 const col = Math.floor(pos[1]);
-                if (row >= 1 && col >= 1) {
+                // 列必须落在当前网格内；否则交给 remaining 重新紧凑填充，
+                // 避免生成隐式列（P3-14）
+                if (row >= 1 && col >= 1 && col <= GRID_COLS) {
                     const key = `${row},${col}`;
                     if (!placedKeys.has(key)) {
                         card.style.gridRow = row;
@@ -543,5 +578,22 @@ function initCameraSortable() {
         saveOrder(getCurrentPositions(grid));
         // 注意：dragSource 留给 dragend 清理（以应对拖拽到 drop target 外部的场景）。
         // 这里不主动清空，避免 dragend 里 if (dragSource) 跳过后续清理。
+    });
+
+    // 视口跨过窄屏阈值（3 列 ↔ 1 列）时重排：先清掉旧列锁定，再按新列数
+    // 重放偏好。阈值只在 refreshGridCols 内出现一次（P3-14）。
+    let resizeTimer = null;
+    window.addEventListener('resize', () => {
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+            const before = GRID_COLS;
+            refreshGridCols();
+            if (GRID_COLS === before) return;
+            grid.querySelectorAll('.camera-card').forEach(card => {
+                card.style.gridRow = '';
+                card.style.gridColumn = '';
+            });
+            applySavedOrder();
+        }, 150);
     });
 }

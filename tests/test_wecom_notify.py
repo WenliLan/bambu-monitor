@@ -26,7 +26,7 @@
 
 import pytest
 import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
 from bumbo_stats.models import PrinterState, PrinterStatus, HMSError

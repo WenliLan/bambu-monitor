@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bumbo_stats"
-version = "0.5.17"
+version = "0.5.18"
 description = "拓竹3D打印机多机监控面板"
 readme = "README.md"
 license = { text = "MIT" }
@@ -16,7 +16,8 @@ dependencies = [
     "jinja2>=3.1",
     "python-multipart>=0.0.6",
     "aiosqlite>=0.19",
-    "bambu-lab-cloud-api>=1.0.4",  # MQTTClient,核心状态推送必需
+    "requests>=2.31",       # 拓竹云 REST（账号/设备/任务）
+    "paho-mqtt>=2.1",       # 拓竹云 MQTT；不再依赖 bambu-lab-cloud-api 的重量级附带包
     "pyyaml>=6.0",
     "pydantic>=2.0",
 ]

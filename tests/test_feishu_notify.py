@@ -27,7 +27,7 @@
 import pytest
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
 from bumbo_stats.models import PrinterState, PrinterStatus, HMSError
@@ -567,7 +567,7 @@ class TestFeishuCommands:
         assert item["message_id"] == "om_fake_msg"
 
     def test_tc_feishu_18_rejects_non_group_or_no_mention(self, mock_camera):
-        """TC-FEISHU-18: 非群聊 / 未 @机器人 的消息被忽略"""
+        """TC-FEISHU-18: 非群聊 / 未 @机器人 被忽略；无法识别时给出反馈（P2-8）"""
         from bumbo_stats.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
@@ -587,14 +587,18 @@ class TestFeishuCommands:
         notifier._on_message_received(ev_no_at)
         assert notifier._queue.qsize() == 0
 
-        # 群聊但不含指令关键词被忽略
+        # 群聊 @机器人 但无法识别：不执行指令，但回一条提示（不再静默）
         ev_no_kw = _make_lark_event("@_user_1 你好", chat_type="group",
                                     mentioned_keys=["@_user_1"])
         notifier._on_message_received(ev_no_kw)
-        assert notifier._queue.qsize() == 0
+        assert notifier._queue.qsize() == 1
+        reply = notifier._queue.get_nowait()
+        assert reply["event"] == "__reply__"
+        assert "未识别到指令" in reply["text"]
+        assert reply["chat_id"] == "oc_fake_chat"
 
     def test_tc_feishu_19_cooldown_blocks_duplicate(self, mock_camera):
-        """TC-FEISHU-19: 同一指令在冷却窗口内重复触发被丢弃"""
+        """TC-FEISHU-19: 冷却窗口内重复指令不再执行，仅回冷却提示（P2-8）"""
         from bumbo_stats.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
@@ -606,10 +610,14 @@ class TestFeishuCommands:
 
         notifier._on_message_received(ev)
         assert notifier._queue.qsize() == 1  # 第一次入队
+        assert notifier._queue.get_nowait()["event"] == "help"
 
-        # 冷却时间内再次发同一指令 → 被丢弃
+        # 冷却时间内再次发同一指令 → 不重复执行，只回一条提示
         notifier._on_message_received(ev)
-        assert notifier._queue.qsize() == 1  # 未增加
+        assert notifier._queue.qsize() == 1
+        reply = notifier._queue.get_nowait()
+        assert reply["event"] == "__reply__"
+        assert "刚刚已响应过" in reply["text"]
 
     async def test_tc_feishu_20_cmd_threshold_persists(self, mock_camera):
         """TC-FEISHU-20: _cmd_threshold 修改阈值并触发 on_threshold_changed 回调（持久化）

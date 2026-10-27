@@ -42,11 +42,16 @@ def env():
 
 class TestBaseTemplate:
     def test_tc_tpl_01_base_has_cdn(self):
-        """TC-TPL-01: base.html 包含 HTMX 和 Chart.js"""
+        """TC-TPL-01: base.html 保留 Chart.js、移除未使用的 HTMX（P3-13）"""
         content = (TEMPLATES_DIR / "base.html").read_text(encoding="utf-8")
-        assert "htmx.org" in content
+        assert "htmx.org" not in content, (
+            "页面已无 hx-* 属性，不应再加载 HTMX（避免额外网络请求与版本漂移）"
+        )
         assert "chart.js" in content.lower() or "chart.umd" in content.lower()
         assert "dashboard.css" in content
+        assert "?v={{ asset_ver }}" in content, (
+            "静态资源必须带版本号，升级后浏览器不会命中旧缓存"
+        )
 
 
 
@@ -181,7 +186,7 @@ class TestDashboardTemplate:
 
         # 1. .camera-grid 必须是定位上下文
         grid_idx = css.index('.camera-grid {')
-        grid_block = css[grid_idx:grid_idx + 200]
+        grid_block = css[grid_idx:grid_idx + 600]
         assert 'position: relative' in grid_block, (
             ".camera-grid 必须设 position: relative 才能作为 .drag-placeholder 的定位参照"
         )
@@ -714,8 +719,9 @@ class TestDashboardTemplate:
         """TC-TPL-23: 任意打印机状态变化时播放提示音，提醒完成/异常
 
         契约：
-        1. dashboard.js 维护 lastPrinterStates 映射，updateCameraBadge 里
-           只有“前后状态不同”才调用 playStateChime；
+        1. dashboard.js 维护 lastPrinterStates 映射，由 updateAllPrinters →
+           maybeChimeStateChange 检测状态变化（与 DOM 解耦）；只有
+           “RUNNING → PAUSE/FINISH/FAILED/OFFLINE”才调用 playStateChime；
         2. 首次看到某 serial（prev === undefined）只记录不鸣响，
            避免刷新页面时成排噪声；
         3. playStateChime 用 Web Audio（createOscillator）合成，不依赖音频文件；
@@ -741,21 +747,30 @@ class TestDashboardTemplate:
             "静默降级，不能影响状态更新主流程"
         )
 
-        # updateCameraBadge 内：变化才鸣响，首次只记录；变到 running 不鸣响
-        badge_idx = js.index("function updateCameraBadge")
-        badge_block = js[badge_idx:badge_idx + 1200]
-        assert "playStateChime()" in badge_block, (
-            "updateCameraBadge 必须在状态变化时调用 playStateChime()"
+        # 状态变化检测已与 DOM 解耦：updateAllPrinters 对每台设备调用
+        # maybeChimeStateChange，即使卡片尚未渲染（新增设备未刷新页面）也能提醒
+        all_idx = js.index("function updateAllPrinters")
+        all_block = js[all_idx:all_idx + 1200]
+        assert "maybeChimeStateChange(serial, status.state)" in all_block, (
+            "updateAllPrinters 必须对每台设备调用 maybeChimeStateChange，"
+            "将提示音与 DOM 渲染解耦"
         )
-        assert "prev !== undefined" in badge_block and "prev !== state" in badge_block, (
-            "必须同时满足“非首次见到”且“状态变化”才鸣响，"
+        chime_state_idx = js.index("function maybeChimeStateChange")
+        state_block = js[chime_state_idx:chime_state_idx + 1200]
+        assert "playStateChime()" in state_block, (
+            "maybeChimeStateChange 必须在状态变化时调用 playStateChime()"
+        )
+        assert "prev === undefined" in state_block, (
+            "首次看到某 serial 只能记录状态，不得鸣响，"
             "避免刷新页面时所有卡片成排发声"
         )
-        assert "state.toLowerCase() !== 'running'" in badge_block, (
-            "变到 running 不得鸣响：开始打印不需要提醒，"
-            "只有离开 running（完成/暂停/失败等）才需要用户关注"
+        assert "const CHIME_FROM = 'RUNNING'" in js, (
+            "必须以 RUNNING 作为鸣响起点"
         )
-        assert "lastPrinterStates[serial] = state" in badge_block, (
+        assert "CHIME_TO.has(normalized)" in state_block, (
+            "只有离开 RUNNING 进入 PAUSE/FINISH/FAILED/OFFLINE 才鸣响"
+        )
+        assert "lastPrinterStates[serial] = normalized" in state_block, (
             "鸣响判断后必须更新 lastPrinterStates，同一状态不重复鸣响"
         )
 
@@ -828,3 +843,69 @@ class TestDashboardTemplate:
             "必须用 classList.toggle('camera-state-center', state !== 'running')："
             "running 回左上角默认位置，其它状态放大居中"
         )
+
+    def test_tc_tpl_24_single_source_grid_columns(self):
+        """TC-TPL-24: 摄像头网格列数只有一个来源（P3-14）
+
+        修复前：sortable.js 的 GRID_COLS、dashboard.css 的 repeat(3, 1fr)
+        与 @media 里的 1fr 各写一份，窄屏时 JS 按 3 列锁定位置而 CSS 只有
+        1 列，首列被压成 2px。修复后：
+        1. CSS 只消费 var(--camera-cols)，媒体查询不再覆盖 .camera-grid 列模板；
+        2. JS 的 refreshGridCols() 是唯一写入方，阈值只保留 MOBILE_MAX_WIDTH。
+        """
+        css = (TEMPLATES_DIR.parent / "static" / "css" / "dashboard.css").read_text(
+            encoding="utf-8"
+        )
+        js = (TEMPLATES_DIR.parent / "static" / "js" / "sortable.js").read_text(
+            encoding="utf-8"
+        )
+
+        grid_block = css[
+            css.index(".camera-grid {") : css.index(".camera-grid.layout-ready")
+        ]
+        assert "repeat(var(--camera-cols)" in grid_block, (
+            "camera-grid 列模板必须消费 CSS 变量 --camera-cols"
+        )
+        assert "repeat(3, 1fr)" not in grid_block, (
+            "camera-grid 不得再硬编码 3 列"
+        )
+
+        media_block = css[css.index("@media (max-width: 768px)") :]
+        assert ".camera-grid {" not in media_block, (
+            "媒体查询不得再覆盖 .camera-grid 的列模板，窄屏降级交给 JS"
+        )
+
+        assert "const GRID_COLS = 3" not in js, (
+            "拖拽逻辑不得再使用硬编码列数常量"
+        )
+        assert "MOBILE_MAX_WIDTH" in js and "refreshGridCols" in js, (
+            "必须由 refreshGridCols() 按 MOBILE_MAX_WIDTH 写入唯一列数"
+        )
+        assert "Math.floor(nextIdx / GRID_COLS)" in js, (
+            "位置锁定必须读取运行时 GRID_COLS"
+        )
+
+    def test_tc_tpl_25_unknown_printer_refresh_banner(self):
+        """TC-TPL-25: status_batch 出现页面未知的 serial 时提示刷新（P2-19）
+
+        运行中新增打印机后，旧页面没有对应卡片，更新会全部静默。
+        前端必须检测“数据里有、DOM 里没有”的 serial 并提示刷新，
+        而不是要求用户自己猜为什么新机器不动。
+        """
+        js = (
+            TEMPLATES_DIR.parent / "static" / "js" / "dashboard.js"
+        ).read_text(encoding="utf-8")
+        css = (
+            TEMPLATES_DIR.parent / "static" / "css" / "dashboard.css"
+        ).read_text(encoding="utf-8")
+
+        assert "function maybeShowUnknownPrinterBanner" in js, (
+            "必须提供未知 serial 的检测与提示函数"
+        )
+        all_idx = js.index("function updateAllPrinters")
+        all_block = js[all_idx:all_idx + 900]
+        assert "maybeShowUnknownPrinterBanner(serial)" in all_block, (
+            "updateAllPrinters 必须对每个 serial 检查页面是否已有卡片"
+        )
+        assert "location.reload()" in js, "提示必须提供刷新入口"
+        assert ".unknown-printer-banner" in css, "提示条需要有可见样式"

@@ -23,7 +23,7 @@
                 <img
                     class="camera-img"
                     data-serial="{{ printer.serial }}"
-                    src="/static/img/camera-offline.svg"
+                    src="/static/img/camera-offline.svg?v={{ asset_ver }}"
                     alt="{{ printer.name }}"
                 >
                 <div class="camera-overlay" id="overlay-{{ printer.serial }}">
@@ -111,10 +111,10 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/dashboard.js"></script>
-<script src="/static/js/charts.js"></script>
-<script src="/static/js/camera.js"></script>
-<script src="/static/js/sortable.js"></script>
+<script src="/static/js/dashboard.js?v={{ asset_ver }}"></script>
+<script src="/static/js/charts.js?v={{ asset_ver }}"></script>
+<script src="/static/js/camera.js?v={{ asset_ver }}"></script>
+<script src="/static/js/sortable.js?v={{ asset_ver }}"></script>
 <script>
     // 初始化
     const PRINTER_SERIALS = [{% for p in printers %}"{{ p.serial }}",{% endfor %}];

@@ -6,10 +6,8 @@
   - 测试 WebSocket 广播和企微通知入队
 """
 
-import asyncio
 import time
 from dataclasses import dataclass
-from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -46,7 +44,7 @@ def _make_status(state: PrinterState = PrinterState.RUNNING, name: str = "TestPr
 def _make_ai_config(**kwargs) -> AIGuardSettings:
     defaults = dict(
         enabled=True, interval=600, frames_per_check=3,
-        model="fff_gray", track="adapted", threshold=0.0,
+        threshold=0.0,
         alert_frames=3, cooldown=1800, alert_dir="/tmp/test_alerts",
     )
     defaults.update(kwargs)
@@ -339,8 +337,9 @@ class TestAIGuardConfig:
         assert cfg.enabled is True
         assert cfg.interval == 600
         assert cfg.frames_per_check == 10
-        assert cfg.model == "fff_gray"
-        assert cfg.track == "adapted"
+        # P2-11：model/track 从未传给检测器，已删除，避免“改了也没用”
+        assert not hasattr(cfg, "model")
+        assert not hasattr(cfg, "track")
         assert cfg.threshold == 0.0
         assert cfg.alert_frames == 3
         assert cfg.cooldown == 1800
@@ -359,14 +358,15 @@ printers:
 ai_guard:
   enabled: true
   interval: 300
-  model: dino_ft
+  model: dino_ft          # 历史遗留键：已删除的无效配置，加载时应被忽略
   alert_frames: 5
 """, encoding="utf-8")
 
         config = load_config(str(config_file))
         assert config.ai_guard.enabled is True
         assert config.ai_guard.interval == 300
-        assert config.ai_guard.model == "dino_ft"
+        # P2-11：旧 YAML 残留 model 键不报错，也不会产生“假配置项”
+        assert not hasattr(config.ai_guard, "model")
         assert config.ai_guard.alert_frames == 5
 
 
@@ -429,11 +429,11 @@ class TestAIGuardThresholdSync:
         guard, mock_detector, mock_gallery = self._make_guard_with_gallery(0.5)
 
         # 超出上界
-        old = guard.set_threshold(2.5)
+        assert guard.set_threshold(2.5) == 0.5
         assert mock_detector.threshold == 1.0
         assert mock_gallery.decision_threshold == 1.0
         # 低于下界
-        old = guard.set_threshold(-0.3)
+        assert guard.set_threshold(-0.3) == 1.0
         assert mock_detector.threshold == 0.0
         assert mock_gallery.decision_threshold == 0.0
 

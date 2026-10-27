@@ -15,8 +15,6 @@
 """
 
 import pytest
-from unittest.mock import MagicMock
-from datetime import datetime
 
 from bumbo_stats.config import PrinterConfig
 from bumbo_stats.models import PrinterState

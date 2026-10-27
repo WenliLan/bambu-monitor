@@ -23,7 +23,7 @@ import aiosqlite
 from datetime import date, datetime, timedelta
 from unittest.mock import patch, MagicMock
 
-from bumbo_stats.database import Database, SECONDS_PER_DAY
+from bumbo_stats.database import SECONDS_PER_DAY
 
 
 # ===== 动态日期 (相对于真实今天) =====

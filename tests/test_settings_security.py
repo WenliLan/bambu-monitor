@@ -17,17 +17,16 @@
 """
 
 import json
-import os
 import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, AsyncMock
 import hashlib
 
 from fastapi.testclient import TestClient
 
 from bumbo_stats.config import AppConfig, CloudConfig, PrinterConfig, AppSettings, WeComSettings, UiSettings, load_config
-from bumbo_stats.models import PrinterStatus, PrinterState, TodayUsageItem, MonthlyUsage, MonthlyUsagePoint
+from bumbo_stats.models import PrinterStatus, PrinterState
 
 
 def _create_test_app():
@@ -276,21 +275,88 @@ class TestAuthenticationFlow:
         assert correct_hash not in resp.text
 
     def test_tc_sec_13_password_change_invalidates_old_cookie(self, test_client):
-        """TC-SEC-13: 密码更改后旧 Cookie 失效"""
+        """TC-SEC-13: 密码更改后旧会话 Cookie 失效（P2-14 随机 token）"""
         cfg = test_client.app.state.config
-        old_hash = cfg.hash_password("old_password")
-        cfg.ui.admin_password_hash = old_hash
+        cfg.ui.admin_password_hash = cfg.hash_password("old_password")
 
-        # 用旧密码登录
-        test_client.cookies.set("bumbo_auth", old_hash)
+        # 用旧密码登录，拿到随机会话 token
+        resp = test_client.post("/api/auth/login", json={"password": "old_password"})
+        assert resp.status_code == 200
+        old_token = test_client.cookies.get("bumbo_auth")
+        assert old_token and old_token != cfg.ui.admin_password_hash
 
         resp = test_client.post("/api/settings/password", json={"password": "new_password"})
         assert resp.status_code == 200
+        new_token = test_client.cookies.get("bumbo_auth")
+        assert new_token and new_token != old_token
 
-        # 旧哈希值已无效
+        # 旧哈希值与密码均已更新
         new_hash = cfg.hash_password("new_password")
         assert cfg.ui.admin_password_hash == new_hash
-        assert old_hash != new_hash
+
+        # 旧会话应已失效；当前客户端换发的新会话仍可用
+        test_client.cookies.set("bumbo_auth", old_token)
+        assert test_client.get("/api/status").status_code == 401
+        test_client.cookies.set("bumbo_auth", new_token)
+        assert test_client.get("/api/status").status_code == 200
+
+
+class TestPublicEndpointsAndSessions:
+    """P2-14：随机会话 token + /healthz 公开 + 未登录重定向"""
+
+    def test_tc_sec_17_healthz_is_public_and_leaks_no_secrets(self, test_client):
+        """TC-SEC-17: 未登录也可访问 /healthz，且不返回凭据类字段"""
+        cfg = test_client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("secret")
+
+        resp = test_client.get("/healthz")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["version"]
+        assert "cloud" in data and "printers" in data
+
+        body = resp.text.lower()
+        assert "password" not in body
+        assert "access_code" not in body
+        assert "token_file" not in body
+
+    def test_tc_sec_18_login_cookie_is_random_not_password_hash(self, test_client):
+        """TC-SEC-18: 登录签发随机会话 token，伪造 token 无法通过鉴权"""
+        cfg = test_client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("pw1234")
+
+        resp = test_client.post("/api/auth/login", json={"password": "pw1234"})
+        assert resp.status_code == 200
+        token = resp.cookies.get("bumbo_auth")
+        assert token
+        assert token != cfg.ui.admin_password_hash
+        assert len(token) >= 32
+
+        test_client.cookies.set("bumbo_auth", "forged-token")
+        assert test_client.get("/api/status").status_code == 401
+
+    def test_tc_sec_19_unauthenticated_ui_redirects_to_login(self, test_client):
+        """TC-SEC-19: 已设置密码但未登录时，面板跳转登录页（P2-4）"""
+        cfg = test_client.app.state.config
+        cfg.ui.admin_password_hash = cfg.hash_password("pw1234")
+
+        resp = test_client.get("/", follow_redirects=False)
+        assert resp.status_code in (302, 303, 307)
+        assert resp.headers["location"].endswith("/login")
+
+        page = test_client.get("/settings")
+        assert page.status_code == 200
+        assert "password" in page.text.lower()
+
+    def test_tc_sec_20_first_run_redirects_to_setup(self, test_client):
+        """TC-SEC-20: 首次运行（无密码）时面板引导到设置页"""
+        cfg = test_client.app.state.config
+        cfg.ui.admin_password_hash = ""
+
+        resp = test_client.get("/", follow_redirects=False)
+        assert resp.status_code in (302, 303, 307)
+        assert resp.headers["location"].endswith("/settings")
+        assert test_client.get("/api/status").status_code == 401
 
 
 class TestYAMLConfigIntegrity:
@@ -339,7 +405,9 @@ class TestInputValidation:
         """TC-SEC-16: 修改密码时过短密码被拒绝"""
         cfg = test_client.app.state.config
         cfg.ui.admin_password_hash = cfg.hash_password("oldpw")
-        test_client.cookies.set("bumbo_auth", cfg.ui.admin_password_hash)
+        assert test_client.post(
+            "/api/auth/login", json={"password": "oldpw"}
+        ).status_code == 200
 
         resp = test_client.post("/api/settings/password", json={"password": "x"})
         assert resp.status_code == 400

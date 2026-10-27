@@ -6,7 +6,7 @@ from pathlib import Path
 
 import aiosqlite
 
-from .models import DailyUsage, MonthlyUsage, MonthlyUsagePoint, PrintSession, TodayUsageItem
+from .models import MonthlyUsage, MonthlyUsagePoint, PrintSession, TodayUsageItem
 
 logger = logging.getLogger(__name__)
 

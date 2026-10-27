@@ -7,7 +7,7 @@
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from bumbo_stats.api.websocket import ConnectionManager
 
 

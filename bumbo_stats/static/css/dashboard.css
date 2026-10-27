@@ -155,7 +155,10 @@ body.ws-connecting main.container {
 /* ===== 摄像头网格 ===== */
 .camera-grid {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    /* 列数唯一来源：JS 写入的 --camera-cols（窄屏为 1，宽屏为 3）。
+       CSS 不再硬编码 repeat(3,...)，媒体查询里也不再覆盖列模板（P3-14）。 */
+    --camera-cols: 3;
+    grid-template-columns: repeat(var(--camera-cols), minmax(0, 1fr));
     gap: 16px;
     position: relative;  /* 作为 .drag-placeholder 绝对定位的参照容器 */
     /* 默认隐藏：避免浏览器在 sortable.js 加载之前以 CSS Grid auto-flow
@@ -776,7 +779,8 @@ input[type="checkbox"] {
 /* ===== 响应式 ===== */
 @media (max-width: 768px) {
     .container { padding: 12px; }
-    .camera-grid { grid-template-columns: 1fr; }
+    /* .camera-grid 的列数由 JS 通过 --camera-cols 统一控制（P3-14），
+       此处不得再写列模板，否则会与拖拽落点计算分家。 */
     .printer-cards { grid-template-columns: 1fr; }
     .util-name { flex: 0 0 70px; font-size: 0.82rem; }
 }
@@ -1028,4 +1032,34 @@ input[type="checkbox"] {
     object-fit: cover;
     border-radius: 6px;
     border: 1px solid var(--border);
+}
+
+/* ===== 新增打印机提示（P2-19） ===== */
+/* status_batch 中出现本页尚未渲染的 serial 时，dashboard.js 动态插入此条，
+   提示用户刷新以生成新卡片，避免该机器持续静默。 */
+.unknown-printer-banner {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    z-index: 120;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    color: var(--text);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    font-size: 0.88rem;
+}
+
+.unknown-printer-banner button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 0.82rem;
 }

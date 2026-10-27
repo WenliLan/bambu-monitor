@@ -14,7 +14,6 @@
   TC-HMS-11: 未填 attr/raw_code 时不崩溃（默认 0）
 """
 
-import pytest
 
 from bumbo_stats.models import HMSError, lookup_hms_error, HMS_ERROR_CODES
 from bumbo_stats.printer.wecom import WeComNotifier, EVENT_ERROR

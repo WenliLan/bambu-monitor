@@ -4,12 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Bumbo Stats{% endblock %}</title>
-    <!-- HTMX -->
-    <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg4sYj7Auy6VnxdL2Eer9a2Y54b0mV" crossorigin="anonymous"></script>
     <!-- Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <!-- 自定义样式 -->
-    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <!-- 自定义样式（asset_ver 由后端按版本号注入，升级后强制刷新缓存 P2-21） -->
+    <link rel="stylesheet" href="/static/css/dashboard.css?v={{ asset_ver }}">
     {% block head %}{% endblock %}
 </head>
 <body>
