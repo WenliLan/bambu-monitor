@@ -7,8 +7,8 @@
 #    但仍可能覆盖你刚手工加入的内容; 每次写回会保留一份 printers.yaml.bak。
 #    增删打印机可直接用面板「设置 → 打印机」(即时生效, 无需重启)。
 # 敏感字段可用环境变量替代明文落盘(优先级高于本文件):
-#   BUMBO_TOKEN_FILE / BUMBO_WECOM_BOT_ID / BUMBO_WECOM_SECRET /
-#   BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL
+#   BAMBU_TOKEN_FILE / BAMBU_WECOM_BOT_ID / BAMBU_WECOM_SECRET /
+#   BAMBU_FEISHU_APP_ID / BAMBU_FEISHU_APP_SECRET / BAMBU_DASHBOARD_URL
 
 cloud:
   # token_file: ~/.bambu_monitor_token   # 可选, Token 保存路径(默认用户主目录)
@@ -74,7 +74,7 @@ feishu:
 # 发布包内置 DINOv2+kNN 检测器(bambu_ai_deploy_dinoknn), 无需训练。
 # 只有安装了 pip install ".[ai]" 时才把 enabled 改为 true; 未装依赖时保持 false。
 # deploy_dir: 在发布包根目录启动 serve 可留空自动探测, 其他目录需指定
-# (或设环境变量 BUMBO_AI_DEPLOY_DIR); 目录无效时该功能自动禁用, 不影响其他模块。
+# (或设环境变量 BAMBU_AI_DEPLOY_DIR); 目录无效时该功能自动禁用, 不影响其他模块。
 ai_guard:
   enabled: false                 # 装 [ai] 后改为 true
   interval: 600                  # 检测间隔(秒)

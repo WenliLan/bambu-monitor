@@ -17,7 +17,7 @@ bambu_monitor v{VERSION} 正式发布包
   · 自检判据改为代码中真实存在的日志（AI 启动行打印 DINOv2+kNN(k) 与图库数量），
     xFormers 缺失告警明确为 CPU 预期降级；AI 检测器改为后台加载，不再阻塞启动。
   · 日志目录统一由 settings.log_dir（默认 ./logs，相对启动目录）决定，
-    支持 BUMBO_LOG_DIR；启动横幅打印配置文件与日志的绝对路径。
+    支持 BAMBU_LOG_DIR；启动横幅打印配置文件与日志的绝对路径。
 
 三、依赖与配置（P2）
   · 移除第三方 bambu-lab-cloud-api：自研云端 REST / MQTT / JPEG 客户端，
@@ -78,7 +78,7 @@ bambu_monitor v{VERSION} 正式发布包
   摄像头/AI 检测: 按端口自动分流两种协议——
     A1/A1 mini/P1P/P1S  → TCP 6000 JPEG, 开箱即用;
     X1 全系/P2S/P2P/X2D/H2D/H2S → RTSPS 322, 需 ffmpeg(三选一):
-      系统安装 ffmpeg 加入 PATH / 设环境变量 BUMBO_FFMPEG_EXE / pip install ".[rtsp]"。
+      系统安装 ffmpeg 加入 PATH / 设环境变量 BAMBU_FFMPEG_EXE / pip install ".[rtsp]"。
 
 【升级注意】
   · 默认监听地址由 0.0.0.0 改为 127.0.0.1；需局域网访问请在 printers.yaml
@@ -89,4 +89,4 @@ bambu_monitor v{VERSION} 正式发布包
 
 【安全提醒】
   printers.yaml 填好后含明文凭据，请勿提交到任何仓库;
-  多用户共用机器建议用环境变量替代(BUMBO_WECOM_SECRET 等，见 README)。
+  多用户共用机器建议用环境变量替代(BAMBU_WECOM_SECRET 等，见 README)。

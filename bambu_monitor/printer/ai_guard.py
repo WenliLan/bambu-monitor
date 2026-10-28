@@ -237,14 +237,14 @@ class AIGuardLoop:
     def _resolve_deploy_dir(self) -> Optional[Path]:
         """解析 AI 检测器代码目录（发布兼容：不依赖源码仓库布局）
 
-        优先级：配置 ai_guard.deploy_dir > 环境变量 BUMBO_AI_DEPLOY_DIR >
+        优先级：配置 ai_guard.deploy_dir > 环境变量 BAMBU_AI_DEPLOY_DIR >
         自动探测候选（源码仓库布局 / 当前工作目录）。pip install 后包在
         site-packages 里，__file__ 向上找不到仓库目录，必须靠前两项指定。
         """
         candidates = []
         if self._cfg.deploy_dir:
             candidates.append(Path(self._cfg.deploy_dir))
-        env_dir = os.environ.get("BUMBO_AI_DEPLOY_DIR")
+        env_dir = os.environ.get("BAMBU_AI_DEPLOY_DIR")
         if env_dir:
             candidates.append(Path(env_dir))
         here = Path(__file__).resolve().parent
@@ -269,7 +269,7 @@ class AIGuardLoop:
                 raise FileNotFoundError(
                     "未找到 AI 检测器目录（需包含 detector.py）。"
                     "源码仓库运行时自动探测；pip install 部署请在 printers.yaml 的 "
-                    "ai_guard.deploy_dir 或环境变量 BUMBO_AI_DEPLOY_DIR 中指定路径"
+                    "ai_guard.deploy_dir 或环境变量 BAMBU_AI_DEPLOY_DIR 中指定路径"
                 )
             deploy_dir = str(deploy)
             # deploy 目录自带 extractor/knn/dino_knn，无需再挂源码仓库的

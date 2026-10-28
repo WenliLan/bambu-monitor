@@ -103,7 +103,7 @@ $EDITOR printers.yaml
 
 - 推荐基准是 `[notify]`；AI 是显式可选项，装完必须把 `ai_guard.enabled` 改为 `true` 才会启用
 - `[ai]` 需要 VC++ 2015-2022 x64 ≥ 14.36（Windows）
-- X1/P2S/P2P/X2D/H2D/H2S 等 RTSPS 摄像头机型需 ffmpeg：系统 PATH / `BUMBO_FFMPEG_EXE` 指向 ffmpeg.exe / `pip install ".[rtsp]"` 三选一
+- X1/P2S/P2P/X2D/H2D/H2S 等 RTSPS 摄像头机型需 ffmpeg：系统 PATH / `BAMBU_FFMPEG_EXE` 指向 ffmpeg.exe / `pip install ".[rtsp]"` 三选一
 
 ### 2. 启动与登录
 
@@ -155,9 +155,9 @@ bambu-monitor login                     # cn 提示手机号，us 提示邮箱
 - **不再需要"先 login 再 serve"**：无 Token 会降级启动，先在网页登录即可
 - `pip install .` 是非 editable 安装：修改项目根源码对已安装 CLI 无效；开发调试请 `pip install -e ".[dev]"`
 - **改 `printers.yaml` 前先停 `serve`**：面板保存设置时只回写本次修改的段并保留 `.bak`，但运行期手工编辑仍可能被覆盖；增删打印机优先用网页 **设置 → 打印机**
-- 日志路径由 `settings.log_dir` 决定（默认 `./logs`，相对启动目录；可用 `BUMBO_LOG_DIR` 覆盖），启动横幅会打印绝对路径，**不要再按旧文档去 site-packages 里找**
+- 日志路径由 `settings.log_dir` 决定（默认 `./logs`，相对启动目录；可用 `BAMBU_LOG_DIR` 覆盖），启动横幅会打印绝对路径，**不要再按旧文档去 site-packages 里找**
 - 发布包不含 `tests/`，不要试图跑 pytest
-- AI 检测器自动探测仅在发布包根目录启动 `serve` 时生效；在其他目录启动需配 `ai_guard.deploy_dir` 或环境变量 `BUMBO_AI_DEPLOY_DIR=<根>/bambu_ai_deploy_dinoknn`；目录无效时 AI 自动禁用，不影响其他功能
+- AI 检测器自动探测仅在发布包根目录启动 `serve` 时生效；在其他目录启动需配 `ai_guard.deploy_dir` 或环境变量 `BAMBU_AI_DEPLOY_DIR=<根>/bambu_ai_deploy_dinoknn`；目录无效时 AI 自动禁用，不影响其他功能
 - 摄像头按端口自动分流：A1/P1 系（TCP 6000）开箱即用；RTSPS 机型需 ffmpeg（日志出现 `摄像头协议探测: ... -> RTSPS(322, ffmpeg)` 即生效）
 - 通知截图依赖 Playwright，需额外 `playwright install msedge`（或 chromium）
 - `printers.yaml` 含明文 `access_code`/`secret`，**勿提交到公开仓库**
@@ -192,7 +192,7 @@ bambu-monitor login                     # cn 提示手机号，us 提示邮箱
   | A1 / A1 mini / P1P / P1S | TCP 6000 JPEG | 开箱即用 |
   | X1 全系 / P2S / P2P / X2D / H2D / H2S 等 | RTSPS 322 | 需 ffmpeg（三选一） |
 
-- RTSPS 机型的 ffmpeg 任选一种：系统安装并加入 PATH；设 `BUMBO_FFMPEG_EXE` 指向 ffmpeg.exe；或 `pip install ".[rtsp]"`（自带静态 ffmpeg）。未装时仅该类机型无画面，其他功能不受影响
+- RTSPS 机型的 ffmpeg 任选一种：系统安装并加入 PATH；设 `BAMBU_FFMPEG_EXE` 指向 ffmpeg.exe；或 `pip install ".[rtsp]"`（自带静态 ffmpeg）。未装时仅该类机型无画面，其他功能不受影响
 
 ## 消息通知（企业微信 / 飞书）
 
@@ -266,7 +266,7 @@ python scripts/monitor.py --source 0        # 需 pip install opencv-python
 
 - **源码仓库方式运行**：自动探测，无需配置
 - **pip 安装方式运行**：在发布包根目录启动 `bambu-monitor serve` 即可自动探测；
-  若在其他目录运行，需指定 `ai_guard.deploy_dir` 或 `BUMBO_AI_DEPLOY_DIR`
+  若在其他目录运行，需指定 `ai_guard.deploy_dir` 或 `BAMBU_AI_DEPLOY_DIR`
 - 目录不存在或依赖缺失时 AI 功能自动禁用，不影响其他模块
 
 ## 安全注意事项
@@ -276,8 +276,8 @@ python scripts/monitor.py --source 0        # 需 pip install opencv-python
 - 登录 Cookie 保存**进程内随机 session token**（`secrets.token_urlsafe`，HttpOnly，7 天过期），不再是口令哈希；服务重启后需重新登录
 - `printers.yaml` 含打印机 `access_code`、机器人 `secret` 等**明文凭据**，请勿提交到公开仓库（默认已被 `.gitignore` 排除）
 - **多用户/容器环境推荐用环境变量替代明文落盘**（优先级高于 YAML）：
-  `BUMBO_TOKEN_FILE`、`BUMBO_WECOM_BOT_ID`、`BUMBO_WECOM_SECRET`、
-  `BUMBO_FEISHU_APP_ID`、`BUMBO_FEISHU_APP_SECRET`、`BUMBO_DASHBOARD_URL`、`BUMBO_LOG_DIR`
+  `BAMBU_TOKEN_FILE`、`BAMBU_WECOM_BOT_ID`、`BAMBU_WECOM_SECRET`、
+  `BAMBU_FEISHU_APP_ID`、`BAMBU_FEISHU_APP_SECRET`、`BAMBU_DASHBOARD_URL`、`BAMBU_LOG_DIR`
 - 公网部署请保持 `127.0.0.1` 监听并配合反向代理（HTTPS），不要把面板直接暴露到公网
 - **分发时请用 git 导出**（`git clone` / `git archive`），不要直接打包工作目录：`data/`（数据库、报警实拍照片）、`printers.yaml`（全部凭据）、`logs/` 均只应留在本地
 - Token/密钥未做本地加密存储，多用户环境请限制文件读取权限
@@ -290,7 +290,7 @@ python scripts/monitor.py --source 0        # 需 pip install opencv-python
 | 面板显示"未连接拓竹云" | 进 设置 → 云端 登录；或 CLI `bambu-monitor login`。账号区域要与 `mqtt_broker` 一致（cn 手机号 / us 邮箱） |
 | `curl /api/printers` 返回 401 | 正常：接口已鉴权。先登录拿 Cookie，或看 `/healthz` |
 | 状态一直 OFFLINE / 不更新 | 看 `/healthz` 的 `cloud.authenticated` 与 `printers[].mqtt_connected`；确认 Token 未失效、区域正确、`cn.mqtt.bambulab.com:8883` 可达 |
-| 日志里找不到 `logs/app.log` | 看启动横幅打印的"日志文件"绝对路径；路径由 `settings.log_dir` / `BUMBO_LOG_DIR` 决定 |
+| 日志里找不到 `logs/app.log` | 看启动横幅打印的"日志文件"绝对路径；路径由 `settings.log_dir` / `BAMBU_LOG_DIR` 决定 |
 | 摄像头黑屏/离线 | 确认打印机与主机同网段、`ip`/`access_code` 正确、固件已开启局域网；RTSPS 机型另确认 ffmpeg 可用（日志有"未找到 ffmpeg"告警） |
 | 收不到通知 | 设置页确认通道 `enabled` 与各事件开关；企微检查机器人在群内且 IP 在白名单；飞书检查权限、事件订阅方式（长连接）与版本已发布 |
 | 飞书点了启用/发送测试无效 | v0.5.18 起热加载即时生效；若仍失败，看日志是否有凭据/权限错误，再重启一次确认 |
@@ -313,7 +313,9 @@ ruff check bambu_monitor tests
 代码入口：`bambu_monitor/main.py`（CLI）、`bambu_monitor/api/`（FastAPI 路由/WebSocket）、
 `bambu_monitor/printer/`（云端 MQTT 状态机、通知、AI 守卫）、`bambu_monitor/cloud_api.py`（自研云端 REST）。
 
-发布包**不含** `tests/` 与开发文档（`AGENTS.md` / `DESIGN.md` / `SECURITY_REVIEW.md`）。
+发布包**不含** `tests/` 与开发文档（`AGENTS.md` / `DESIGN.md`）。
+DINOv2 骨干网权重（约 84MB，Meta CC-BY-NC 许可）不入库；首次运行由 `torch.hub` 自动下载，
+网络受限时可从 Releases 获取 `dinov2_cache` 离线包，详见 [`bambu_ai_deploy_dinoknn/README.md`](bambu_ai_deploy_dinoknn/README.md)。
 
 ## License
 

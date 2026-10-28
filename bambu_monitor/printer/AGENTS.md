@@ -9,7 +9,7 @@
 | `monitor.py` | `PrintMonitor`：事件驱动 + 定期批量广播，封装 layer3 / 50% / completed 三类通知的去重状态 |
 | `manager.py` | `PrinterManager`：维护打印机连接、状态聚合、MQTT 订阅生命周期 |
 | `camera.py` | 摄像头帧拉取：按端口探测自动分流 JPEG(TCP 6000, A1/P1) / RTSPS(322, X1/P2S/X2D/H2D 等) |
-| `rtspcam.py` | RTSPS 机型取帧（ffmpeg 子进程，系统 PATH / `BUMBO_FFMPEG_EXE` / imageio-ffmpeg 逐级查找，缺失时降级无画面） |
+| `rtspcam.py` | RTSPS 机型取帧（ffmpeg 子进程，系统 PATH / `BAMBU_FFMPEG_EXE` / imageio-ffmpeg 逐级查找，缺失时降级无画面） |
 | `ai_guard.py` | AI 异常检测守卫，调用 `bambu_ai_deploy_dinoknn` 推理模型 |
 | `wecom.py` | 企业微信机器人通知（含命令指令路由、layer3/cooldown 去重、HMS/AI 报警合并） |
 | `feishu.py` | 飞书机器人通知（与 `wecom.py` 镜像但走飞书模板卡片） |

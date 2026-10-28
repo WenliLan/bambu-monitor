@@ -118,9 +118,9 @@ class TestEnvOverrides:
 
     def test_tc_cfg_09_env_overrides_secrets(self, sample_config_yaml, monkeypatch):
         """TC-CFG-09: 环境变量优先级高于 YAML，覆盖凭据类字段"""
-        monkeypatch.setenv("BUMBO_WECOM_SECRET", "env-secret-xyz")
-        monkeypatch.setenv("BUMBO_TOKEN_FILE", "/tmp/env_token")
-        monkeypatch.setenv("BUMBO_DASHBOARD_URL", "http://env.host:8000/")
+        monkeypatch.setenv("BAMBU_WECOM_SECRET", "env-secret-xyz")
+        monkeypatch.setenv("BAMBU_TOKEN_FILE", "/tmp/env_token")
+        monkeypatch.setenv("BAMBU_DASHBOARD_URL", "http://env.host:8000/")
         config = load_config(sample_config_yaml)
         assert config.wecom.secret == "env-secret-xyz"
         assert config.cloud.token_file == "/tmp/env_token"
@@ -128,7 +128,7 @@ class TestEnvOverrides:
 
     def test_tc_cfg_10_env_absent_keeps_yaml(self, sample_config_yaml, monkeypatch):
         """TC-CFG-10: 未设置环境变量时保持 YAML 原值"""
-        monkeypatch.delenv("BUMBO_WECOM_SECRET", raising=False)
+        monkeypatch.delenv("BAMBU_WECOM_SECRET", raising=False)
         config = load_config(sample_config_yaml)
         assert config.wecom.secret != "env-secret-xyz"
 

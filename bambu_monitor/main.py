@@ -35,7 +35,7 @@ def _setup_logging(log_dir: str, debug: bool = False) -> Path:
 
     v0.5.17 的日志目录是 ``Path(__file__).parent.parent``，pip 安装后落在
     site-packages 里（P1-4）。现在统一由 ``settings.log_dir``（默认 ./logs，
-    相对启动目录）决定，并支持 ``BUMBO_LOG_DIR`` 覆盖。
+    相对启动目录）决定，并支持 ``BAMBU_LOG_DIR`` 覆盖。
     """
     log_path = (Path(log_dir).expanduser() / "app.log").resolve()
     log_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,7 @@
 """测试 RTSPS 取帧模块 - printer/rtspcam.py
 
 测试用例:
-  TC-RTSP-01: find_ffmpeg 优先使用 BUMBO_FFMPEG_EXE 环境变量
+  TC-RTSP-01: find_ffmpeg 优先使用 BAMBU_FFMPEG_EXE 环境变量
   TC-RTSP-02: 环境变量无效时回退系统 PATH
   TC-RTSP-03: 全部不可用时 find_ffmpeg 返回 None
   TC-RTSP-04: ffmpeg 缺失时 capture_rtsp_frame 返回 None 且只告警一次
@@ -22,10 +22,10 @@ def setup_function():
 
 class TestFindFfmpeg:
     def test_tc_rtsp_01_env_var_first(self, tmp_path):
-        """TC-RTSP-01: BUMBO_FFMPEG_EXE 指向存在的文件时优先使用"""
+        """TC-RTSP-01: BAMBU_FFMPEG_EXE 指向存在的文件时优先使用"""
         exe = tmp_path / "myffmpeg.exe"
         exe.write_bytes(b"")
-        with patch.dict(rtspcam.os.environ, {"BUMBO_FFMPEG_EXE": str(exe)}):
+        with patch.dict(rtspcam.os.environ, {"BAMBU_FFMPEG_EXE": str(exe)}):
             assert rtspcam.find_ffmpeg() == str(exe)
 
     def test_tc_rtsp_02_path_fallback(self):

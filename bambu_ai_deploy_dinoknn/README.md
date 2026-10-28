@@ -358,7 +358,12 @@ A: 这是 kNN 的固有弱点。建议：
 - 严重污染时直接 `rm gallery/*.npy && python scripts/init_gallery.py` 重来
 
 ### Q: DINOv2 模型权重在哪？
-A: `baselines/dinov2_cache/hub/checkpoints/dinov2_vits14_pretrain.pth` (~80MB)。本包自动走本地缓存，无需联网。
+A: 权重是 Meta 官方的 DINOv2 ViT-S/14（约 84MB），**不随本仓库分发**（CC-BY-NC 4.0 非商用许可），首次运行时按以下顺序获取：
+
+1. **本地离线包**（优先，零网络）：若存在 `bambu_ai_deploy_dinoknn/dinov2_cache/hub/`，直接加载。可从本仓库 GitHub Release 下载 `dinov2_cache-<版本>.zip`，解压到 `bambu_ai_deploy_dinoknn/` 即得此目录。
+2. **在线自动下载**（默认）：由 `torch.hub` 从 github.com 拉实现、从 dl.fbaipublicfiles.com 拉权重，缓存到 `~/.cache/torch/hub`，之后即可离线复用。
+
+若两步都失败（网络受限），会抛出带上述操作路径的 `RuntimeError`。注意：只有骨干网是自动获取的，**你的 kNN 检测模型资产 `gallery/` 已随仓库分发**，clone 后即可直接使用。
 
 ### Q: 推理速度多少？
 A: CPU 上 DINOv2 ViT-S/14 提特征约 50-80ms/张。k-NN 检索几 ms。整体 ~80ms/帧。

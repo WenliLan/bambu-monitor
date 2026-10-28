@@ -10,6 +10,7 @@
 """
 import os
 import sys
+import logging
 import torch
 import torch.nn as nn
 import numpy as np
@@ -40,20 +41,44 @@ TFM = transforms.Compose([
 _MODEL = None
 
 
+def _load_from_local():
+    """本地缓存分支: 从发布/离线包内置的 hub 仓库 + 权重加载, 零网络依赖."""
+    model = torch.hub.load(DINOV2_HUB_LOCAL, DINOV2_NAME,
+                           source="local", pretrained=False)
+    sd = torch.load(DINOV2_CKPT_LOCAL, map_location="cpu", weights_only=True)
+    model.load_state_dict(sd)
+    return model
+
+
+def _load_from_hub():
+    """在线回退分支: 首次运行由 torch.hub 拉取 DINOv2 官方实现与权重.
+
+    下载内容落在 TORCH_HOME(默认 ~/.cache/torch/hub), 第二次运行即可离线。
+    网络受限环境可改从 GitHub Release 下载离线包解压到 DINOV2_CACHE_DIR。
+    """
+    log = logging.getLogger("dinoknn.dino")
+    log.info("本地 DINOv2 缓存缺失, 首次运行将从 torch.hub 下载权重(约 84MB, 仅需一次)")
+    try:
+        return torch.hub.load("facebookresearch/dinov2", DINOV2_NAME, trust_repo=True)
+    except Exception as exc:  # 网络不可达 / 代理拦截
+        raise RuntimeError(
+            f"DINOv2 骨干网在线下载失败: {exc}\n"
+            f"可选方案: 1) 确认可访问 github.com 与 dl.fbaipublicfiles.com 后重试; "
+            f"2) 从 GitHub Release 下载 dinov2_cache 离线包, 解压到 "
+            f"{os.path.join(BASE, 'dinov2_cache')} 后重新运行。"
+        ) from exc
+
+
 def load_model():
-    """懒加载+缓存 DINOv2 ViT-S/14, 冻结参数。走本地 hub 仓库 + 本地权重, 零网络依赖。"""
+    """懒加载+缓存 DINOv2 ViT-S/14, 冻结参数.
+
+    优先走本地 hub 仓库(零网络), 缺失时回退 torch.hub 在线下载。
+    """
     global _MODEL
     if _MODEL is None:
-        if not os.path.isdir(DINOV2_HUB_LOCAL):
-            raise FileNotFoundError(
-                f"本地 DINOv2 hub 仓库缺失: {DINOV2_HUB_LOCAL}\n"
-                f"首次运行: 会从 torch.hub 拉取 (需联网), 后续将走本地缓存。")
-        if not os.path.exists(DINOV2_CKPT_LOCAL):
-            raise FileNotFoundError(f"本地权重缺失: {DINOV2_CKPT_LOCAL}")
-        model = torch.hub.load(DINOV2_HUB_LOCAL, DINOV2_NAME,
-                               source="local", pretrained=False)
-        sd = torch.load(DINOV2_CKPT_LOCAL, map_location="cpu", weights_only=True)
-        model.load_state_dict(sd)
+        local_ready = (os.path.isdir(DINOV2_HUB_LOCAL)
+                       and os.path.exists(DINOV2_CKPT_LOCAL))
+        model = _load_from_local() if local_ready else _load_from_hub()
         model.eval().to(DEVICE)
         for p in model.parameters():
             p.requires_grad = False

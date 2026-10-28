@@ -4,7 +4,7 @@
 - A1 / A1 mini / P1P / P1S：TCP 6000 端口 JPEG 帧流（bambulab SDK JPEGFrameStream）
 - X1 全系 / P2S / P2P / X2D / H2D / H2S 等：RTSPS 322 端口（本模块，需 ffmpeg）
 
-ffmpeg 查找顺序：环境变量 BUMBO_FFMPEG_EXE → PATH → imageio-ffmpeg（pip 安装 [rtsp] extra）。
+ffmpeg 查找顺序：环境变量 BAMBU_FFMPEG_EXE → PATH → imageio-ffmpeg（pip 安装 [rtsp] extra）。
 找不到可用 ffmpeg 时相关函数返回 None 并给出一次性 warning，不影响其他功能。
 """
 
@@ -36,11 +36,11 @@ def find_ffmpeg() -> Optional[str]:
         ffmpeg 路径；不可用时 None
     """
     # 1. 环境变量显式指定
-    env_exe = os.environ.get("BUMBO_FFMPEG_EXE", "").strip()
+    env_exe = os.environ.get("BAMBU_FFMPEG_EXE", "").strip()
     if env_exe:
         if os.path.isfile(env_exe):
             return env_exe
-        logger.warning("BUMBO_FFMPEG_EXE 指向的文件不存在: %s", env_exe)
+        logger.warning("BAMBU_FFMPEG_EXE 指向的文件不存在: %s", env_exe)
 
     # 2. 系统 PATH
     exe = shutil.which("ffmpeg")
@@ -83,7 +83,7 @@ def capture_rtsp_frame(ip: str, access_code: str) -> Optional[bytes]:
             logger.warning(
                 "未找到 ffmpeg，RTSPS 机型（X1/P2S/P2P/X2D/H2D 等）摄像头不可用；"
                 '安装方式任选其一：系统安装 ffmpeg 并加入 PATH、设置环境变量 '
-                'BUMBO_FFMPEG_EXE、或 pip install "bambu_monitor[rtsp]"'
+                'BAMBU_FFMPEG_EXE、或 pip install "bambu_monitor[rtsp]"'
             )
         return None
 

@@ -98,7 +98,7 @@ class AIGuardSettings(BaseModel):
     deploy_dir: str = Field(
         default="",
         description="AI 检测器代码目录（bambu_ai_deploy_dinoknn）；留空自动探测，"
-                    "也可用环境变量 BUMBO_AI_DEPLOY_DIR 覆盖。pip install 部署时必须指定",
+                    "也可用环境变量 BAMBU_AI_DEPLOY_DIR 覆盖。pip install 部署时必须指定",
     )
 
 
@@ -198,19 +198,19 @@ class AppConfig(BaseModel):
 def _apply_env_overrides(config: AppConfig) -> AppConfig:
     """环境变量覆盖敏感配置（避免明文凭据落盘到 YAML）
 
-    支持：BUMBO_TOKEN_FILE / BUMBO_WECOM_BOT_ID / BUMBO_WECOM_SECRET /
-    BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL /
-    BUMBO_LOG_DIR
+    支持：BAMBU_TOKEN_FILE / BAMBU_WECOM_BOT_ID / BAMBU_WECOM_SECRET /
+    BAMBU_FEISHU_APP_ID / BAMBU_FEISHU_APP_SECRET / BAMBU_DASHBOARD_URL /
+    BAMBU_LOG_DIR
     优先级：环境变量 > printers.yaml，便于容器/CI 场景不写入凭据文件。
     """
     env_map = [
-        ("BUMBO_TOKEN_FILE", config.cloud, "token_file"),
-        ("BUMBO_WECOM_BOT_ID", config.wecom, "bot_id"),
-        ("BUMBO_WECOM_SECRET", config.wecom, "secret"),
-        ("BUMBO_FEISHU_APP_ID", config.feishu, "app_id"),
-        ("BUMBO_FEISHU_APP_SECRET", config.feishu, "app_secret"),
-        ("BUMBO_DASHBOARD_URL", config.settings, "dashboard_url"),
-        ("BUMBO_LOG_DIR", config.settings, "log_dir"),
+        ("BAMBU_TOKEN_FILE", config.cloud, "token_file"),
+        ("BAMBU_WECOM_BOT_ID", config.wecom, "bot_id"),
+        ("BAMBU_WECOM_SECRET", config.wecom, "secret"),
+        ("BAMBU_FEISHU_APP_ID", config.feishu, "app_id"),
+        ("BAMBU_FEISHU_APP_SECRET", config.feishu, "app_secret"),
+        ("BAMBU_DASHBOARD_URL", config.settings, "dashboard_url"),
+        ("BAMBU_LOG_DIR", config.settings, "log_dir"),
     ]
     for var, section, attr in env_map:
         val = os.environ.get(var)

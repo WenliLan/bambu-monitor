@@ -1,6 +1,6 @@
 # AGENTS.md — bambu_monitor Agent 任务入口
 
-> 这是面向 AI Agent 的最小任务入口；视觉/功能合约见 `DESIGN.md`，安全审查见 `SECURITY_REVIEW.md`。
+> 这是面向 AI Agent 的最小任务入口；视觉/功能合约见 `DESIGN.md`。
 
 ## 项目定位
 
@@ -34,7 +34,7 @@ python -m pytest tests/test_database.py tests/test_monitor.py tests/test_numeric
 ## 关键约束
 
 - `printers.yaml` 已在 `.gitignore`，不要将其写入仓库或回显凭据。
-- 敏感凭据（企业微信 `secret`、摄像头 `access_code`、Token）不得硬编码；详见 `SECURITY_REVIEW.md`。
+- 敏感凭据（企业微信 `secret`、摄像头 `access_code`、Token）不得硬编码，一律走 `printers.yaml`。
 - 日志写入 `logs/app.log`（按天轮转，保留 7 天），不要修改其结构。
 - 修改 `pyproject.toml` 中的 `asyncio_mode = "auto"`、第三方库日志静默白名单等既有设置。
 
@@ -64,6 +64,6 @@ python -m pytest tests/test_database.py tests/test_monitor.py tests/test_numeric
 
 ## 不属于本次入口的范畴
 
-- 不修改 `pyproject.toml`、`DESIGN.md`、`SECURITY_REVIEW.md`。
+- 不修改 `pyproject.toml`、`DESIGN.md`。
 - 不新增项目级 Skill / Command / Custom Agent / MCP / Workflow。
 - 不做依赖大版本升级；遵循 `bambu_monitor/models.py` 中既有的数据契约。
