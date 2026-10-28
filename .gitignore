@@ -51,9 +51,12 @@ bambu_ai_deploy_dinoknn/data/
 *.onnx.data
 *.pt
 *.npy
-# 反选: dinoknn 发布资产目录下的权重/特征库不受上面的扩展名忽略
+# 反选: dinoknn 特征库(gallery)随包分发, 不受上面的扩展名忽略
 !bambu_ai_deploy_dinoknn/gallery/**
-!bambu_ai_deploy_dinoknn/dinov2_cache/**
+# DINOv2 骨干权重缓存: torch.hub 首次运行自动下载, 不入库(离线分发见 GitHub Release 附件)
+bambu_ai_deploy_dinoknn/dinov2_cache/
+# 内部安全审查文档: 含真实凭据样例, 仅本地保留, 不公开分发
+SECURITY_REVIEW.md
 
 # 实拍照片（含工作室画面，隐私）
 alerts_review/

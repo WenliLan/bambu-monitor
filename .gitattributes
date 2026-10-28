@@ -1,6 +1,6 @@
 # 发布导出排除项：git archive / GitHub zip 不会包含标记 export-ignore 的文件
-# （内部文档含真实凭据示例与 Agent 工作流合约，不对外分发）
-SECURITY_REVIEW.md export-ignore
+# （内部文档含 Agent 工作流合约与真实凭据样例，不对外分发）
+# 注: SECURITY_REVIEW.md 已改为仅本地保留(见 .gitignore), 无需再标记
 DESIGN.md export-ignore
 AGENTS.md export-ignore
 .gitattributes export-ignore
