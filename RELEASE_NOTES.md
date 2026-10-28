@@ -3,7 +3,22 @@ bambu_monitor v{VERSION} 正式发布包
 
 (本文件由 build_release.ps1 在打包时注入版本号，模板在源码仓库 RELEASE_NOTES.md)
 
-【本版主题：按 v0.5.17 部署复盘反馈修复 1 个致命缺陷、4 个阻塞流程问题与 21 处文档/实现不一致】
+【本版主题：项目更名 bambu-monitor 并首次开源发布；修复 DINOv2 骨干网缺缓存时必崩的发布阻断缺陷】
+
+零、更名与发布（v0.6.0）
+  · 项目由 bumbo_stats 更名为 bambu-monitor：Python 包目录、setuptools 包名、
+    控制台命令、代码注释与全部文档同步统一。
+  · 破坏性变更（升级必读，详见文末【升级注意】）：import 路径、CLI 命令、
+    环境变量前缀、Token 与数据库文件名、Web 登录 Cookie 名均已改变。
+  · DINOv2 ViT-S/14 骨干网（约 84MB，Meta CC-BY-NC 4.0 非商用许可）不再入仓库：
+    本地缓存齐备时零网络加载，缺失时自动回退 torch.hub 在线下载；
+    网络受限可从 Releases 下载 dinov2_cache 离线包解压到 bambu_ai_deploy_dinoknn/。
+    本项目自训的 kNN 模型资产 gallery/ 始终随仓库分发，clone 即可用。
+  · 修复：骨干网缓存缺失时 load_model() 直接抛 FileNotFoundError，而提示文案
+    声称"会从 torch.hub 拉取"却无对应实现 —— 补上真正的在线回退分支并加回归测试。
+  · 仓库历史清理：剔除模型缓存与旧研究方案权重，体积由 329MB 降至约 1MB。
+
+【以下为 v0.5.18 基线内容】
 
 一、致命问题（P0）
   · 云端 MQTT 不再复用打印机本体身份：监控端改用独立唯一 client_id
@@ -81,6 +96,17 @@ bambu_monitor v{VERSION} 正式发布包
       系统安装 ffmpeg 加入 PATH / 设环境变量 BAMBU_FFMPEG_EXE / pip install ".[rtsp]"。
 
 【升级注意】
+  · 更名迁移（v0.6.0，均为破坏性）：
+      - 启动命令 python -m bumbo_stats.main → python -m bambu_monitor.main，
+        控制台脚本 bumbo-stats → bambu-monitor
+      - 环境变量前缀 BUMBO_* → BAMBU_*（含 TOKEN_FILE / WECOM_* / FEISHU_* /
+        DASHBOARD_URL / LOG_DIR / AI_DEPLOY_DIR / FFMPEG_EXE）
+      - Token 文件 ~/.bumbo_token → ~/.bambu_monitor_token
+      - 数据库 ./data/bumbo_stats.db → ./data/bambu_monitor.db
+        （两者均为改名不改动内容；若沿用旧文件名请在 printers.yaml 显式指定路径）
+      - 登录 Cookie 改名，升级后需重新登录一次
+      - 前端卡片布局的 localStorage 键改名，旧自定义排序会重置一次
+    外部集成若曾解析上述名称（计划任务、监控脚本、反向代理规则），需同步调整。
   · 默认监听地址由 0.0.0.0 改为 127.0.0.1；需局域网访问请在 printers.yaml
     把 settings.host 改为 0.0.0.0（并确保已设管理员密码）。
   · 旧 printers.yaml 可直接沿用；ai_guard.model / track 会被忽略，可删除。

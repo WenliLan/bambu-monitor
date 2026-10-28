@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bambu_monitor"
-version = "0.5.18"
+version = "0.6.0"
 description = "拓竹3D打印机多机监控面板"
 readme = "README.md"
 license = { text = "MIT" }
