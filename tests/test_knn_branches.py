@@ -69,6 +69,21 @@ def gallery(tmp_path):
     return FeatureGallery(str(tmp_path), k=5, decision_threshold=0.5)
 
 
+def test_feature_gallery_default_threshold_is_factory_value(tmp_path):
+    """未显式传阈值且无 meta.json 时，使用出厂默认 0.7."""
+    _make_gallery(tmp_path)
+    default_gallery = FeatureGallery(str(tmp_path), k=5)
+    assert default_gallery.decision_threshold == 0.7
+
+
+def test_shipped_gallery_meta_threshold_is_factory_value():
+    """发布包内置 gallery 的 meta.json 与出厂默认阈值一致."""
+    meta = json.loads(
+        (DEPLOY_DIR / "gallery" / "meta.json").read_text(encoding="utf-8")
+    )
+    assert meta["decision_threshold"] == 0.7
+
+
 def test_predict_numpy_branch(gallery):
     rng = np.random.default_rng(123)
     query = _unit(rng.normal(size=D)).astype("float32")

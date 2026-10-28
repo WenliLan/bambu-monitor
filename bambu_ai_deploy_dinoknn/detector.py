@@ -65,7 +65,7 @@ class PrintDefectDetector:
     参数:
         gallery_dir:   gallery/ 目录 (含 anomaly/normal_features.npy 等)
         k:             k-NN 的 k
-        threshold:     anomaly 占比阈值 (默认 0.5 = 多数投票)
+        threshold:     anomaly 占比阈值 (默认 0.7)
         alert_frames:  push() 模式连续 N 帧异常才触发报警
         save_alerts:   是否保存报警图片到 alerts_review/
         save_heatmap_always: 每帧保存原图到 alerts_review/all/
@@ -85,7 +85,7 @@ class PrintDefectDetector:
         # 1) 加载 gallery
         # 先创建空 gallery 实例探一下 threshold (来自 meta.json)
         probe = FeatureGallery(gallery_dir, k=k,
-                               decision_threshold=threshold or 0.5)
+                               decision_threshold=threshold or 0.7)
         self.gallery = probe
         self.k = probe.k
         self.threshold = threshold if threshold is not None else probe.decision_threshold

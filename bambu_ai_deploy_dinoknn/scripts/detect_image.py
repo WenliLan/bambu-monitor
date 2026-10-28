@@ -26,7 +26,7 @@ def main():
     ap.add_argument("images", nargs="+", help="图片路径 (支持通配)")
     ap.add_argument("--k", type=int, default=5, help="k-NN 的 k (默认 5)")
     ap.add_argument("--threshold", type=float, default=None,
-                    help="anomaly 占比阈值 (默认 0.5 = 多数投票)")
+                    help="anomaly 占比阈值 (默认 0.7)")
     ap.add_argument("--nearest", action="store_true",
                     help="显示 top-k 最近邻图片")
     ap.add_argument("--save-alerts", action="store_true",

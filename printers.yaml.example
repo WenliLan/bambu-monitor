@@ -79,7 +79,7 @@ ai_guard:
   enabled: false                 # 装 [ai] 后改为 true
   interval: 600                  # 检测间隔(秒)
   frames_per_check: 3            # 每次检测抓帧数量
-  threshold: 0.0                 # 决策阈值(0~1), 0 表示用特征库默认值 0.5; 建议 0.5~0.8, 可在 Web 设置页/群指令远程调整
+  threshold: 0.7                 # 决策阈值(0~1), 出厂默认 0.7; 越高误报越少但漏报风险增加, 可在 Web 设置页/群指令远程调整
   alert_frames: 3                # 连续 N 帧异常才报警
   cooldown: 1800                 # 报警冷却时间(秒)
   alert_dir: ./data/alerts_review # 报警图片保存目录

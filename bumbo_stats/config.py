@@ -91,7 +91,7 @@ class AIGuardSettings(BaseModel):
     enabled: bool = Field(default=True, description="是否启用 AI 异常报警")
     interval: int = Field(default=600, description="检测间隔（秒），默认 10 分钟")
     frames_per_check: int = Field(default=10, description="每次检测抓帧数量")
-    threshold: float = Field(default=0.0, description="分类阈值，0 表示使用模型推荐默认值")
+    threshold: float = Field(default=0.0, description="分类阈值，0 表示使用特征库出厂默认 0.7")
     alert_frames: int = Field(default=3, description="连续 N 帧异常才触发报警")
     cooldown: int = Field(default=1800, description="报警冷却时间（秒），默认 30 分钟")
     alert_dir: str = Field(default="./data/alerts_review", description="报警图片保存目录")

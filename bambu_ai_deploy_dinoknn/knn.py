@@ -57,13 +57,13 @@ class FeatureGallery:
         self,
         gallery_dir: str,
         k: int = 5,
-        decision_threshold: float = 0.5,
+        decision_threshold: float = 0.7,
     ):
         """
         参数:
             gallery_dir:         gallery/ 目录路径
             k:                   k-NN 的 k (默认 5)
-            decision_threshold:  加权 anomaly 占比 ≥ 阈值 → 判 anomaly (默认 0.5)
+            decision_threshold:  加权 anomaly 占比 ≥ 阈值 → 判 anomaly (默认 0.7)
         """
         self.dir = gallery_dir
         self.k = k

@@ -211,7 +211,7 @@ from detector import PrintDefectDetector
 # === 1. 初始化（自动加载 gallery + 预热 DINOv2） ===
 det = PrintDefectDetector(
     k=5,                         # k-NN 的 k (默认 5)
-    threshold=0.5,               # anomaly 占比阈值 (默认 0.5 = 多数投票)
+    threshold=0.7,               # anomaly 占比阈值 (默认 0.7)
     alert_frames=3,              # 连续 N 帧异常才报警 (默认 3)
     save_alerts=True,            # 是否保存报警图片
     save_heatmap_always=False,   # 是否每帧都存 (调试用, 默认 False)
@@ -222,7 +222,7 @@ print(det.stats())
 # === 2. 单帧检测 ===
 result = det.detect("test.jpg", return_nearest=True)
 print(result.to_dict())
-# {'anomaly': True, 'probability': 0.8, 'threshold': 0.5, 'sub_class': 'anomaly',
+# {'anomaly': True, 'probability': 0.8, 'threshold': 0.7, 'sub_class': 'anomaly',
 #  'ms': 63.2, 'n_nearest': 5}
 
 for nn in result.nearest[:3]:
@@ -255,7 +255,7 @@ det.reset()
 1. **提特征**：DINOv2 ViT-S/14 输出 384 维 CLS token，L2 归一化
 2. **k-NN 检索**：在 gallery（已合并 anomaly + normal）中找 cosine 距离最近的 k=5 个样本
 3. **统计**：这 5 个邻居里有多少是 anomaly，记为 `a`，则 `P(anomaly) = a / k`
-4. **决策**：`P(anomaly) >= threshold` (默认 0.5) → 判为异常
+4. **决策**：`P(anomaly) >= threshold` (默认 0.7) → 判为异常
 
 **优点**：
 - 完全可解释：返回 top-k 最近邻，能直接看到"为什么判异常"
@@ -273,12 +273,12 @@ det.reset()
 
 ### 自定义阈值
 
-预置 gallery 的默认决策阈值为 **0.5（k=5 近邻相似度加权投票）**：P(anomaly) =
+预置 gallery 的默认决策阈值为 **0.7（k=5 近邻相似度加权投票）**：P(anomaly) =
 Σsim(anomaly 近邻) / Σsim(全部近邻)，比等权投票对“照片数量少的异常类”更公平。
-基于随包 gallery 实测：对已收录异常类召回约 83%，正常图单帧误报约 5%
-（配合连续 3 帧才报警，实际误报接近 0）。对比参考：0.7 召回约 69%；0.8 几乎零误报但召回约 66%。
+基于随包 gallery 实测：0.7 对已收录异常类召回约 69%，比 0.5 的约 83% 更保守、误报更少；
+0.8 几乎零误报但召回约 66%。配合连续 3 帧才报警，可进一步压低实际误报。
 注意：照片极少的异常类（如仅 1 张参考图的 clog）分箱在阈值边缘，多补几张同类型照片即可稳定触发。
-攒照片过程中偏吵就调高，担心漏报就调低：
+担心漏报就调低到 0.5，攒照片过程中仍偏吵就调到 0.8：
 
 ```bash
 # 严格模式: 80% 才判异常 (减少误报)

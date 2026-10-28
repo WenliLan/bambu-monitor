@@ -243,12 +243,12 @@ bumbo-stats login                     # cn 提示手机号，us 提示邮箱
 ## AI 缺陷检测（可选）
 
 检测器位于 `bambu_ai_deploy_dinoknn/`，采用 **DINOv2 ViT-S/14 + kNN 特征库**，零训练、开箱即检。
-**发布包与源码仓库已内置模型权重与预训练特征库**（`gallery/`，默认 `k=5`、阈值 0.5）。
+**发布包与源码仓库已内置模型权重与预训练特征库**（`gallery/`，默认 `k=5`、阈值 0.7）。
 
 - 安装：`pip install ".[notify,ai]"`，然后把 `printers.yaml` 的 `ai_guard.enabled` 改为 `true`
 - 启动日志会打印真实信息：
-  `AI 异常报警已启动: 检测器=DINOv2+kNN(k=5) 图库 normal=131/anomaly=134 阈值=0.50 间隔=600s ...`
-- `ai_guard.threshold: 0.0` 表示使用特征库默认阈值（0.5）；建议 0.5~0.8，可在设置页或群指令 `阈值 0.6` 调整
+  `AI 异常报警已启动: 检测器=DINOv2+kNN(k=5) 图库 normal=131/anomaly=134 阈值=0.70 间隔=600s ...`
+- `printers.yaml.example` 出厂配置为 `threshold: 0.7`；填 `0` 表示沿用特征库出厂阈值（同样为 0.7）。阈值越高误报越少，但漏报风险增加，可在设置页或群指令 `阈值 0.6` 调整
 - CPU 推理即可；首次启动会加载 ViT-S/14 权重（后台线程加载，不阻塞面板），并允许出现 xFormers 缺失告警
 
 **持续优化（可选）**：把你自己拍的照片放入 `bambu_ai_deploy_dinoknn/data/{normal,anomaly}/`，
