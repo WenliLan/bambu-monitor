@@ -1,4 +1,4 @@
-# bumbo_stats release build script (ASCII-only for Windows PowerShell 5.1)
+# bambu_monitor release build script (ASCII-only for Windows PowerShell 5.1)
 # Usage: powershell -File build_release.ps1 [-Version 0.5.12]
 # Steps: clean-tree check -> git archive export -> secret scan -> wheel verify -> cleanup -> zip -> git tag
 param(
@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Repo = $PSScriptRoot
 $Parent = Split-Path $Repo -Parent
-$OutDir = Join-Path $Parent "bumbo_stats_release"
+$OutDir = Join-Path $Parent "bambu_monitor_release"
 $RelName = Split-Path $OutDir -Leaf
 
 # 0. version from pyproject.toml if not given
@@ -73,7 +73,7 @@ if (-not $whl) { Write-Host "wheel build FAILED" -ForegroundColor Red; exit 1 }
 Get-ChildItem $OutDir -Recurse -Force -Directory |
     Where-Object { $_.Name -match "egg-info|^build$|^dist$|__pycache__" } |
     Remove-Item -Recurse -Force
-$zip = Join-Path $Parent "bumbo_stats_release_v$Version.zip"
+$zip = Join-Path $Parent "bambu_monitor_release_v$Version.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $OutDir -DestinationPath $zip
 

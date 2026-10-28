@@ -15,9 +15,9 @@
 """
 
 
-from bumbo_stats.models import HMSError, lookup_hms_error, HMS_ERROR_CODES
-from bumbo_stats.printer.wecom import WeComNotifier, EVENT_ERROR
-from bumbo_stats.printer.feishu import FeishuNotifier
+from bambu_monitor.models import HMSError, lookup_hms_error, HMS_ERROR_CODES
+from bambu_monitor.printer.wecom import WeComNotifier, EVENT_ERROR
+from bambu_monitor.printer.feishu import FeishuNotifier
 
 
 # ---------------------------------------------------------------------------

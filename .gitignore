@@ -81,5 +81,5 @@ Thumbs.db
 # Node (if any frontend)
 node_modules/
 # start_service.bat (tracked in main repo)
-bumbo_stats/IDEA.md
+bambu_monitor/IDEA.md
 register_autostart.ps1

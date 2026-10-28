@@ -18,8 +18,8 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
-from bumbo_stats.config import AppConfig, PrinterConfig, AppSettings, CloudConfig
-from bumbo_stats.models import PrinterStatus, PrinterState, TodayUsageItem, MonthlyUsage, MonthlyUsagePoint
+from bambu_monitor.config import AppConfig, PrinterConfig, AppSettings, CloudConfig
+from bambu_monitor.models import PrinterStatus, PrinterState, TodayUsageItem, MonthlyUsage, MonthlyUsagePoint
 
 
 def _create_test_app():
@@ -65,7 +65,7 @@ def _create_test_app():
     ]
     mock_db.get_sessions.return_value = []
 
-    from bumbo_stats.api.app import create_app
+    from bambu_monitor.api.app import create_app
     app = create_app(config=config)
 
     # 注入 mock 对象
@@ -98,7 +98,7 @@ class TestDashboardRoute:
         """TC-API-01: GET / 返回 HTML 页面"""
         resp = auth_client.get("/")
         assert resp.status_code == 200
-        assert "Bumbo Stats" in resp.text
+        assert "Bambu Monitor" in resp.text
         assert "camera-grid" in resp.text
 
 
@@ -152,7 +152,7 @@ class TestUsageRoutes:
 
 class TestSettingsRoutes:
     """设置页面和 API 测试"""
-    AUTH_COOKIE = "bumbo_auth"
+    AUTH_COOKIE = "bambu_monitor_auth"
 
     def _set_auth(self, client, password="admin"):
         cfg = client.app.state.config
@@ -196,7 +196,7 @@ class TestSettingsRoutes:
         cfg = client.app.state.config
         self._set_auth(client, "admin")
         resp = client.post("/api/settings/cloud", json={
-            "token_file": "~/.bumbo_token",
+            "token_file": "~/.bambu_monitor_token",
             "mqtt_broker": "us",
         })
         assert resp.status_code == 200

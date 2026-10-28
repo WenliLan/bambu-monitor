@@ -3,7 +3,7 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bumbo_stats"
+name = "bambu_monitor"
 version = "0.5.18"
 description = "拓竹3D打印机多机监控面板"
 readme = "README.md"
@@ -55,16 +55,16 @@ dev = [
 ]
 
 [project.scripts]
-bumbo-stats = "bumbo_stats.main:main"
+bambu-monitor = "bambu_monitor.main:main"
 
 [tool.setuptools]
 # 显式列出子包，避免 flat-layout 自动发现报错；include-package-data
 # 默认开启，配合下方 package-data 把 templates/static 打进 wheel。
-packages = ["bumbo_stats", "bumbo_stats.api", "bumbo_stats.printer"]
+packages = ["bambu_monitor", "bambu_monitor.api", "bambu_monitor.printer"]
 
 [tool.setuptools.package-data]
 # Web 面板的 Jinja2 模板与静态资源必须随包分发，否则 pip install 后 500
-bumbo_stats = [
+bambu_monitor = [
     "templates/*.html",
     "static/css/*.css",
     "static/js/*.js",

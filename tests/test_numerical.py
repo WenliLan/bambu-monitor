@@ -23,7 +23,7 @@ import aiosqlite
 from datetime import date, datetime, timedelta
 from unittest.mock import patch, MagicMock
 
-from bumbo_stats.database import SECONDS_PER_DAY
+from bambu_monitor.database import SECONDS_PER_DAY
 
 
 # ===== 动态日期 (相对于真实今天) =====
@@ -70,7 +70,7 @@ def _make_mock_dt():
 
 def _patch_dt():
     """返回 patch 上下文管理器"""
-    return patch("bumbo_stats.database.datetime", _make_mock_dt())
+    return patch("bambu_monitor.database.datetime", _make_mock_dt())
 
 
 # ===== 辅助函数 =====

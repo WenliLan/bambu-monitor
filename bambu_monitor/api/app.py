@@ -20,7 +20,7 @@ from ..printer.camera import CameraManager
 from ..printer.manager import PrinterManager
 from ..printer.monitor import PrintMonitor
 try:
-    # 通知能力可选：未安装 extras 时降级为不启用（pip install "bumbo_stats[notify]"）
+    # 通知能力可选：未安装 extras 时降级为不启用（pip install "bambu_monitor[notify]"）
     from ..printer.wecom import WeComNotifier, WeComConfig
     from ..printer.feishu import FeishuNotifier, FeishuConfig
     _NOTIFY_AVAILABLE = True
@@ -29,7 +29,7 @@ except ImportError as _e:  # noqa: B902
     _NOTIFY_AVAILABLE = False
     logging.getLogger(__name__).warning(
         "通知模块不可用（缺少依赖: %s），监控面板正常运行；"
-        "如需企微/飞书通知请安装: pip install \"bumbo_stats[notify]\"", _e,
+        "如需企微/飞书通知请安装: pip install \"bambu_monitor[notify]\"", _e,
     )
 from ..printer.ai_guard import AIGuardLoop
 from .routes import router, require_auth
@@ -455,7 +455,7 @@ async def lifespan(app: FastAPI):
             app.state.cloud_state["error"] = "no_token"
             logger.error(
                 "未找到拓竹云 Token，面板以离线模式启动（状态/摄像头/AI 不可用）。"
-                "请运行 `bumbo-stats login -c %s`，或在网页「设置 → 拓竹云」中登录。",
+                "请运行 `bambu-monitor login -c %s`，或在网页「设置 → 拓竹云」中登录。",
                 config_path,
             )
         else:
@@ -547,7 +547,7 @@ async def lifespan(app: FastAPI):
         if _feishu_notifier is not None:
             _feishu_notifier.bind_ai_guard(_ai_guard)
 
-        logger.info("Bumbo Stats 已启动，监控 %d 台打印机", len(config.printers))
+        logger.info("Bambu Monitor 已启动，监控 %d 台打印机", len(config.printers))
 
     yield
 
@@ -568,7 +568,7 @@ async def lifespan(app: FastAPI):
             app.state.camera_manager.stop()
         if hasattr(app.state, "cloud_client") and app.state.cloud_client:
             app.state.cloud_client.close()
-        logger.info("Bumbo Stats 已关闭")
+        logger.info("Bambu Monitor 已关闭")
 
 
 def create_app(config: AppConfig | None = None, config_path: str = "printers.yaml") -> FastAPI:
@@ -578,7 +578,7 @@ def create_app(config: AppConfig | None = None, config_path: str = "printers.yam
         config = load_config(config_path)
 
     app = FastAPI(
-        title="Bumbo Stats",
+        title="Bambu Monitor",
         description="拓竹3D打印机多机云端监控面板",
         version=__version__,
         lifespan=lifespan,

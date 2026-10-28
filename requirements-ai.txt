@@ -1,4 +1,4 @@
-# bumbo_stats AI 异常检测运行时依赖
+# bambu_monitor AI 异常检测运行时依赖
 # 安装: pip install -r requirements-ai.txt
 # (或 pip install ".[ai]" —— 在仓库根目录, 依赖内容一致)
 

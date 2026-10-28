@@ -1,0 +1,590 @@
+{% extends "base.html" %}
+
+{% block title %}系统设置 - Bambu Monitor{% endblock %}
+
+{% block content %}
+<div class="settings-container">
+    <h2 class="settings-title">⚙️ 系统设置</h2>
+
+    <!-- Tab 导航 -->
+    <div class="settings-tabs">
+        <button class="tab-btn active" data-tab="cloud">📡 拓竹云</button>
+        <button class="tab-btn" data-tab="printers">🖨️ 打印机</button>
+        <button class="tab-btn" data-tab="wecom">💬 企业微信</button>
+        <button class="tab-btn" data-tab="feishu">🔵 飞书</button>
+        <button class="tab-btn" data-tab="password">🔐 密码</button>
+    </div>
+
+    <!-- 消息提示 -->
+    <div class="settings-msg" id="msg-box" style="display:none"></div>
+
+    <!-- 拓竹云账号 Tab -->
+    <div class="tab-panel active" id="panel-cloud">
+        <form class="settings-form" id="cloud-form">
+            <div class="settings-card">
+                <div class="settings-card-title">📡 拓竹云账号配置</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Token 文件路径</label>
+                        <input name="token_file" value="{{ config.cloud.token_file }}" placeholder="~/.bambu_monitor_token">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>服务器区域</label>
+                        <select name="mqtt_broker">
+                            <option value="cn" {% if config.cloud.mqtt_broker == 'cn' %}selected{% endif %}>🇨🇳 中国区</option>
+                            <option value="us" {% if config.cloud.mqtt_broker == 'us' %}selected{% endif %}>🌍 全球区</option>
+                        </select>
+                    </div>
+                </div>
+                <p class="form-hint">⚠️ 修改账号后需要重启服务才能生效；也可以直接用下方「网页登录」即时生效。</p>
+            </div>
+            <div class="settings-card">
+                <div class="settings-card-title">🔐 网页登录拓竹云</div>
+                <p class="form-hint">账号密码仅用于换取 Token，不会保存到配置。中国区：手机号 + 短信验证码；全球区：邮箱 + 邮件验证码。</p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>账号（手机号 / 邮箱）</label>
+                        <input id="cloud-account" autocomplete="username" placeholder="手机号或邮箱">
+                    </div>
+                    <div class="form-group">
+                        <label>密码</label>
+                        <input id="cloud-password" type="password" autocomplete="current-password" placeholder="拓竹云密码">
+                    </div>
+                </div>
+                <div class="form-row" id="cloud-code-row" style="display:none">
+                    <div class="form-group">
+                        <label>验证码</label>
+                        <input id="cloud-code" inputmode="numeric" placeholder="短信 / 邮件 / MFA 验证码">
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button type="button" class="btn-primary" id="btn-cloud-login">🔐 登录拓竹云</button>
+                    <button type="button" class="btn-secondary" id="btn-cloud-verify" style="display:none">✅ 提交验证码</button>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button type="submit" class="btn-primary">💾 保存配置</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 打印机管理 Tab -->
+    <div class="tab-panel" id="panel-printers">
+        <div class="settings-card">
+            <div class="settings-card-title">🖨️ 已配置的打印机 ({{ config.printers|length }})</div>
+            <div id="printer-list">
+                {% for p in config.printers %}
+                <div class="printer-card" data-serial="{{ p.serial }}">
+                    <div class="printer-card-header">
+                        <div class="printer-card-title">🖨️ {{ p.name }}</div>
+                        <button type="button" class="btn-danger btn-remove-printer btn-small">🗑️ 删除</button>
+                    </div>
+                    <div class="printer-card-body">
+                        <div class="form-group">
+                            <label>名称</label>
+                            <input name="name" value="{{ p.name }}">
+                        </div>
+                        <div class="form-group">
+                            <label>序列号</label>
+                            <input name="serial" value="{{ p.serial }}" readonly>
+                        </div>
+                        <div class="form-group">
+                            <label>位置</label>
+                            <input name="location" value="{{ p.location or '' }}" placeholder="如：工作台A">
+                        </div>
+                        <div class="form-group">
+                            <label>IP 地址</label>
+                            <input name="ip" value="{{ p.ip or '' }}" placeholder="192.168.x.x">
+                        </div>
+                        <div class="form-group">
+                            <label>Access Code</label>
+                            <input name="access_code" value="{{ p.access_code or '' }}" placeholder="摄像头密钥">
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        <div class="btn-group">
+            <button type="button" class="btn-secondary" id="btn-add-printer">➕ 添加打印机</button>
+            <button type="button" class="btn-primary" id="btn-save-printers">💾 保存配置</button>
+        </div>
+    </div>
+
+    <!-- 企业微信 Tab -->
+    <div class="tab-panel" id="panel-wecom">
+        <form class="settings-form" id="wecom-form">
+            <div class="settings-card">
+                <div class="settings-card-title">🔔 总开关</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label class="checkbox-label" style="margin-top: 8px;">
+                            <input type="checkbox" name="enabled" {% if config.wecom.enabled %}checked{% endif %}>
+                            启用企业微信机器人通知
+                        </label>
+                        <p class="form-hint">⚠️ 关闭后所有打印进度 / 完成 / HMS 错误通知都不会推送，关闭期间也会断开企微长连接（群聊指令失效）。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">🔑 机器人凭证</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Bot ID</label>
+                        <input name="bot_id" value="{{ config.wecom.bot_id }}" placeholder="机器人 ID">
+                    </div>
+                    <div class="form-group">
+                        <label>Secret</label>
+                        <input type="password" name="secret" value="{{ config.wecom.secret }}" placeholder="机器人密钥">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>群聊 Chat ID</label>
+                        <input name="chatid" value="{{ config.wecom.chatid }}" placeholder="留空则自动发现">
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">🔔 通知开关</div>
+                <div class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="layer3" {% if config.wecom.layer3 %}checked{% endif %}>
+                        🖨️ 打印到第 3 层时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="progress50" {% if config.wecom.progress50 %}checked{% endif %}>
+                        ⏳ 打印进度 50% 时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="completed" {% if config.wecom.completed %}checked{% endif %}>
+                        ✅ 打印完成时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="error" {% if config.wecom.error %}checked{% endif %}>
+                        🚨 HMS 错误时通知
+                    </label>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button type="submit" class="btn-primary">💾 保存配置</button>
+                <button type="button" class="btn-secondary" id="btn-test-wecom">🧪 发送测试</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 飞书 Tab -->
+    <div class="tab-panel" id="panel-feishu">
+        <form class="settings-form" id="feishu-form">
+            <div class="settings-card">
+                <div class="settings-card-title">🔵 飞书机器人配置</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>启用飞书通知</label>
+                        <label class="checkbox-label" style="margin-top: 8px;">
+                            <input type="checkbox" name="enabled" {% if config.feishu.enabled %}checked{% endif %}>
+                            启用飞书机器人通知
+                        </label>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>App ID</label>
+                        <input name="app_id" value="{{ config.feishu.app_id }}" placeholder="飞书应用 App ID">
+                    </div>
+                    <div class="form-group">
+                        <label>App Secret</label>
+                        <input type="password" name="app_secret" value="{{ config.feishu.app_secret }}" placeholder="飞书应用 App Secret">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>群聊 Chat ID
+                            <button type="button" class="btn-secondary btn-small" id="btn-feishu-chats">🔍 获取群聊</button>
+                        </label>
+                        <input name="chatid" value="{{ config.feishu.chatid }}" placeholder="飞书群聊 Chat ID (oc_...)">
+                        <div id="feishu-chat-list" class="form-hint"></div>
+                        <p class="form-hint">需先在飞书群设置中把应用/机器人加入群聊，并开通 im:chat 读权限。</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">🚨 应用内加急（可选）</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>加急用户 open_id（多个用英文逗号分隔）</label>
+                        <input name="urgent_user_id" value="{{ config.feishu.urgent_user_id }}" placeholder="ou_xxx,ou_yyy">
+                    </div>
+                    <div class="form-group">
+                        <label>每小时上限（0 = 不限）</label>
+                        <input name="urgent_max_per_hour" type="number" min="0" value="{{ config.feishu.urgent_max_per_hour }}">
+                    </div>
+                </div>
+                <div class="checkbox-group">
+                    <span class="form-hint">触发加急的事件：</span>
+                    {% set urgent_events = config.feishu.urgent_on_events or [] %}
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="layer3" {% if 'layer3' in urgent_events %}checked{% endif %}> 第 3 层</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="progress50" {% if 'progress50' in urgent_events %}checked{% endif %}> 进度 50%</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="completed" {% if 'completed' in urgent_events %}checked{% endif %}> 打印完成</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="error" {% if 'error' in urgent_events %}checked{% endif %}> HMS 错误</label>
+                    <label class="checkbox-label"><input type="checkbox" name="urgent_on_events" value="ai_alarm" {% if 'ai_alarm' in urgent_events %}checked{% endif %}> AI 异常</label>
+                </div>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">🔔 通知开关</div>
+                <div class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="layer3" {% if config.feishu.layer3 %}checked{% endif %}>
+                        🖨️ 打印到第 3 层时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="progress50" {% if config.feishu.progress50 %}checked{% endif %}>
+                        ⏳ 打印进度 50% 时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="completed" {% if config.feishu.completed %}checked{% endif %}>
+                        ✅ 打印完成时通知
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="error" {% if config.feishu.error %}checked{% endif %}>
+                        🚨 HMS 错误时通知
+                    </label>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button type="submit" class="btn-primary">💾 保存配置</button>
+                <button type="button" class="btn-secondary" id="btn-test-feishu">🧪 发送测试</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- 修改密码 Tab -->
+    <div class="tab-panel" id="panel-password">
+        <form class="settings-form" id="password-form">
+            <div class="settings-card">
+                <div class="settings-card-title">🔐 修改管理员密码</div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>新密码（至少 4 位）</label>
+                        <input type="password" name="password" placeholder="请输入新密码" minlength="4" required>
+                    </div>
+                </div>
+            </div>
+            <div class="btn-group">
+                <button type="submit" class="btn-primary">🔐 修改密码</button>
+                <button type="button" class="btn-danger" id="btn-logout">🚪 退出登录</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/dashboard.js?v={{ asset_ver }}"></script>
+<script>
+// Tab 切换
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+    });
+});
+
+// 消息提示
+function showMsg(text, isError) {
+    const box = document.getElementById('msg-box');
+    box.textContent = text;
+    box.className = 'settings-msg ' + (isError ? 'error' : 'success');
+    box.style.display = 'block';
+    if (!isError) setTimeout(() => box.style.display = 'none', 3000);
+}
+
+// 通用表单提交（打印机变更后刷新页面以更新摄像头布局）
+async function submitForm(url, data) {
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data)
+    });
+    if (resp.ok) {
+        if (url.includes('printers')) {
+            showMsg('保存成功，摄像头布局将自动调整...', false);
+            setTimeout(() => location.reload(), 800);
+        } else {
+            showMsg('保存成功', false);
+        }
+        return true;
+    }
+    const d = await resp.json();
+    showMsg('保存失败: ' + (d.detail || '未知错误'), true);
+    return false;
+}
+
+// 拓竹云账号
+document.getElementById('cloud-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await submitForm('/api/settings/cloud', Object.fromEntries(fd));
+});
+
+// 网页登录拓竹云（P1-1：无需重启/终端交互）
+function cloudRegion() {
+    const sel = document.querySelector('#cloud-form [name="mqtt_broker"]');
+    return sel ? sel.value : 'cn';
+}
+document.getElementById('btn-cloud-login')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-cloud-login');
+    const account = document.getElementById('cloud-account').value.trim();
+    const password = document.getElementById('cloud-password').value;
+    if (!account || !password) {
+        showMsg('请填写拓竹云账号和密码', true);
+        return;
+    }
+    btn.disabled = true;
+    btn.textContent = '登录中...';
+    try {
+        const resp = await fetch('/api/settings/cloud/login', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({account, password, region: cloudRegion()}),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            showMsg('登录失败: ' + (data.detail || '未知错误'), true);
+        } else if (data.need_code) {
+            document.getElementById('cloud-code-row').style.display = '';
+            document.getElementById('btn-cloud-verify').style.display = '';
+            showMsg(data.hint || '请输入验证码', false);
+            document.getElementById('cloud-code').focus();
+        } else {
+            showMsg('登录成功，正在连接拓竹云...', false);
+            setTimeout(() => location.reload(), 1200);
+        }
+    } catch (err) {
+        showMsg('登录失败: ' + err.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔐 登录拓竹云';
+    }
+});
+document.getElementById('btn-cloud-verify')?.addEventListener('click', async () => {
+    const code = document.getElementById('cloud-code').value.trim();
+    if (!code) {
+        showMsg('请输入验证码', true);
+        return;
+    }
+    const btn = document.getElementById('btn-cloud-verify');
+    btn.disabled = true;
+    btn.textContent = '验证中...';
+    try {
+        const resp = await fetch('/api/settings/cloud/verify', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({code}),
+        });
+        const data = await resp.json();
+        if (resp.ok) {
+            showMsg('登录成功，正在连接拓竹云...', false);
+            setTimeout(() => location.reload(), 1200);
+        } else {
+            showMsg('验证失败: ' + (data.detail || '未知错误'), true);
+        }
+    } catch (err) {
+        showMsg('验证失败: ' + err.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '✅ 提交验证码';
+    }
+});
+
+// 飞书：用当前表单里的凭据列出所在群聊（P2-15）
+document.getElementById('btn-feishu-chats')?.addEventListener('click', async () => {
+    const form = document.getElementById('feishu-form');
+    const fd = new FormData(form);
+    const box = document.getElementById('feishu-chat-list');
+    const btn = document.getElementById('btn-feishu-chats');
+    btn.disabled = true;
+    btn.textContent = '获取中...';
+    try {
+        const resp = await fetch('/api/settings/feishu/chats', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                app_id: fd.get('app_id') || '',
+                app_secret: fd.get('app_secret') || '',
+            }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            box.textContent = '获取失败: ' + (data.detail || '未知错误');
+            return;
+        }
+        if (!data.chats || data.chats.length === 0) {
+            box.textContent = '未找到群聊：请先把应用/机器人加入群聊。';
+            return;
+        }
+        box.innerHTML = '点击填入：' + data.chats.map(c =>
+            `<button type="button" class="btn-secondary btn-small feishu-chat-pick" data-chat-id="${c.chat_id}">${c.name || c.chat_id}</button>`
+        ).join(' ');
+        box.querySelectorAll('.feishu-chat-pick').forEach(el => {
+            el.addEventListener('click', () => {
+                form.querySelector('[name="chatid"]').value = el.dataset.chatId;
+                showMsg('已填入 chatid，记得保存配置', false);
+            });
+        });
+    } catch (err) {
+        box.textContent = '获取失败: ' + err.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🔍 获取群聊';
+    }
+});
+
+// 企业微信
+document.getElementById('wecom-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await submitForm('/api/settings/wecom', {
+        enabled: fd.has('enabled'),
+        bot_id: fd.get('bot_id'),
+        secret: fd.get('secret'),
+        chatid: fd.get('chatid'),
+        layer3: fd.has('layer3'),
+        progress50: fd.has('progress50'),
+        completed: fd.has('completed'),
+        error: fd.has('error'),
+    });
+});
+
+// 飞书
+document.getElementById('feishu-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    await submitForm('/api/settings/feishu', {
+        app_id: fd.get('app_id'),
+        app_secret: fd.get('app_secret'),
+        chatid: fd.get('chatid'),
+        enabled: fd.has('enabled'),
+        layer3: fd.has('layer3'),
+        progress50: fd.has('progress50'),
+        completed: fd.has('completed'),
+        error: fd.has('error'),
+        urgent_user_id: fd.get('urgent_user_id') || '',
+        urgent_on_events: fd.getAll('urgent_on_events'),
+        urgent_max_per_hour: Number(fd.get('urgent_max_per_hour') || 10),
+    });
+});
+
+// 测试按钮 - 企业微信
+document.getElementById('btn-test-wecom')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-test-wecom');
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+    try {
+        const resp = await fetch('/api/settings/wecom/test', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+            showMsg('测试消息发送成功！请查看企业微信群', false);
+        } else {
+            showMsg('发送失败: ' + (data.detail || '未知错误'), true);
+        }
+    } catch (e) {
+        showMsg('发送失败: ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🧪 发送测试';
+    }
+});
+
+// 测试按钮 - 飞书
+document.getElementById('btn-test-feishu')?.addEventListener('click', async () => {
+    const btn = document.getElementById('btn-test-feishu');
+    btn.disabled = true;
+    btn.textContent = '发送中...';
+    try {
+        const resp = await fetch('/api/settings/feishu/test', { method: 'POST' });
+        const data = await resp.json();
+        if (resp.ok) {
+            showMsg('测试消息发送成功！请查看飞书群', false);
+        } else {
+            showMsg('发送失败: ' + (data.detail || '未知错误'), true);
+        }
+    } catch (e) {
+        showMsg('发送失败: ' + e.message, true);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🧪 发送测试';
+    }
+});
+
+// 打印机管理
+document.getElementById('btn-add-printer').addEventListener('click', () => {
+    const list = document.getElementById('printer-list');
+    const card = document.createElement('div');
+    card.className = 'printer-card';
+    card.innerHTML = `
+        <div class="printer-card-header">
+            <div class="printer-card-title">🖨️ 新打印机</div>
+            <button type="button" class="btn-danger btn-remove-printer btn-small">🗑️ 删除</button>
+        </div>
+        <div class="printer-card-body">
+            <div class="form-group"><label>名称</label><input name="name" placeholder="打印机名称"></div>
+            <div class="form-group"><label>序列号</label><input name="serial" placeholder="序列号" required></div>
+            <div class="form-group"><label>位置</label><input name="location" placeholder="位置描述"></div>
+            <div class="form-group"><label>IP 地址</label><input name="ip" placeholder="192.168.x.x"></div>
+            <div class="form-group"><label>Access Code</label><input name="access_code" placeholder="摄像头密钥"></div>
+        </div>
+    `;
+    card.querySelector('.btn-remove-printer').addEventListener('click', () => card.remove());
+    list.appendChild(card);
+});
+
+document.querySelectorAll('.btn-remove-printer').forEach(btn => {
+    btn.addEventListener('click', () => btn.closest('.printer-card').remove());
+});
+
+document.getElementById('btn-save-printers').addEventListener('click', async () => {
+    const cards = document.querySelectorAll('.printer-card');
+    const printers = [];
+    for (const card of cards) {
+        const name = card.querySelector('[name=name]').value;
+        const serial = card.querySelector('[name=serial]').value;
+        if (!serial) { showMsg('序列号不能为空', true); return; }
+        printers.push({
+            name: name || serial,
+            serial,
+            ip: card.querySelector('[name=ip]').value || '',
+            access_code: card.querySelector('[name=access_code]').value || '',
+            location: card.querySelector('[name=location]').value || '',
+        });
+    }
+    await submitForm('/api/settings/printers', {printers});
+});
+
+// 修改密码
+document.getElementById('password-form').addEventListener('submit', async e => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    if (fd.get('password').length < 4) { showMsg('密码至少4位', true); return; }
+    const ok = await submitForm('/api/settings/password', {password: fd.get('password')});
+    if (ok) e.target.reset();
+});
+
+// 退出登录
+document.getElementById('btn-logout').addEventListener('click', async () => {
+    await fetch('/api/auth/logout', {method: 'POST'});
+    location.href = '/';
+});
+
+// 初始化 WebSocket 连接
+initWebSocket();
+</script>
+{% endblock %}

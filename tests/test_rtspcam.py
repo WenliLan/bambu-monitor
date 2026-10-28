@@ -13,7 +13,7 @@
 import subprocess
 from unittest.mock import patch, MagicMock
 
-from bumbo_stats.printer import rtspcam
+from bambu_monitor.printer import rtspcam
 
 
 def setup_function():

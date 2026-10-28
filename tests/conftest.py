@@ -113,7 +113,7 @@ def invalid_config_yaml(tmp_path):
 @pytest.fixture
 async def db(tmp_path):
     """初始化临时数据库"""
-    from bumbo_stats.database import Database
+    from bambu_monitor.database import Database
     db_path = str(tmp_path / "test.db")
     database = Database(db_path)
     await database.init()

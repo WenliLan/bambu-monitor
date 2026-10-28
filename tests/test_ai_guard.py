@@ -12,9 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from bumbo_stats.config import AIGuardSettings
-from bumbo_stats.models import PrinterState, PrinterStatus
-from bumbo_stats.printer.ai_guard import AIGuardLoop
+from bambu_monitor.config import AIGuardSettings
+from bambu_monitor.models import PrinterState, PrinterStatus
+from bambu_monitor.printer.ai_guard import AIGuardLoop
 
 
 # ========== 辅助数据 ==========
@@ -332,7 +332,7 @@ class TestAIGuardConfig:
 
     def test_default_config(self):
         """TC-AI-12: 默认配置值"""
-        from bumbo_stats.config import AIGuardSettings
+        from bambu_monitor.config import AIGuardSettings
         cfg = AIGuardSettings()
         assert cfg.enabled is True
         assert cfg.interval == 600
@@ -347,7 +347,7 @@ class TestAIGuardConfig:
 
     def test_config_from_yaml(self, tmp_path):
         """TC-AI-13: 从 YAML 加载 ai_guard 配置"""
-        from bumbo_stats.config import load_config
+        from bambu_monitor.config import load_config
         config_file = tmp_path / "test.yaml"
         config_file.write_text("""
 cloud:

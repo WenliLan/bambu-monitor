@@ -32,7 +32,7 @@ import pytest
 from jinja2 import Environment, FileSystemLoader
 
 
-TEMPLATES_DIR = Path(__file__).parent.parent / "bumbo_stats" / "templates"
+TEMPLATES_DIR = Path(__file__).parent.parent / "bambu_monitor" / "templates"
 
 
 @pytest.fixture

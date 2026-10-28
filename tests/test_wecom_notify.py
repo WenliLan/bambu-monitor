@@ -29,9 +29,9 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
-from bumbo_stats.models import PrinterState, PrinterStatus, HMSError
-from bumbo_stats.printer.monitor import PrintMonitor
-from bumbo_stats.printer.wecom import (
+from bambu_monitor.models import PrinterState, PrinterStatus, HMSError
+from bambu_monitor.printer.monitor import PrintMonitor
+from bambu_monitor.printer.wecom import (
     WeComNotifier, WeComConfig, _PrinterNotifState,
     EVENT_LAYER3, EVENT_COMPLETED, EVENT_ERROR, EVENT_PROGRESS50,
     normalize_gcode,
@@ -149,7 +149,7 @@ class TestNotificationDeduplicationMonitor:
         注意：layer=100 不触发 layer3（只有==3才触发），所以只有 completed 入队。
         """
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -177,7 +177,7 @@ class TestNotificationDeduplicationMonitor:
         然后因 layer>=3 再次触发通知。使用真实 WeComNotifier。
         """
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -379,7 +379,7 @@ class TestStartupScan:
     async def test_tc_notify_26_startup_syncs_wecom_state_above_layer3(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-26: 启动时已在第3层之后，同步 WeComNotifier 状态（last_gcode 和 layer3_sent）"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -406,7 +406,7 @@ class TestStartupScan:
     async def test_tc_notify_27_startup_syncs_wecom_state_below_layer3(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-27: 启动时小于第3层，同样同步标记已发（运行中任务不补发）"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -576,7 +576,7 @@ class TestNotificationBoundaryConditions:
 class TestWeComNotifierDeduplication:
     async def test_tc_notify_17_wecom_deduplicates_layer3(self):
         """TC-NOTIFY-17: WeComNotifier 层对 layer3 事件去重"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         notifier = WeComNotifier(_make_wecom_config(), [printer_cfg])
@@ -596,7 +596,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_18_wecom_deduplicates_completed(self):
         """TC-NOTIFY-18: WeComNotifier 层对 completed 事件去重"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         notifier = WeComNotifier(_make_wecom_config(), [printer_cfg])
@@ -613,7 +613,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_19_wecom_new_job_resets_layer3(self):
         """TC-NOTIFY-19: WeComNotifier 检测到新任务时重置 layer3_sent"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         notifier = WeComNotifier(_make_wecom_config(), [printer_cfg])
@@ -638,7 +638,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_20_wecom_queue_full_drops_gracefully(self):
         """TC-NOTIFY-20: 队列满时优雅丢弃，不抛异常"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         notifier = WeComNotifier(_make_wecom_config(), [printer_cfg])
@@ -658,7 +658,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_21_wecom_disabled_event_no_queue(self):
         """TC-NOTIFY-21: 禁用的通知事件不入队"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         cfg = _make_wecom_config()
         cfg.layer3 = False  # 禁用 layer3
@@ -673,7 +673,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_51_wecom_master_switch_disabled_no_queue(self):
         """TC-NOTIFY-51: 总开关 enabled=False 时，所有事件均不入队（不限于单项事件）"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         cfg = _make_wecom_config()
         cfg.enabled = False  # 禁用总开关
@@ -695,7 +695,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_52_wecom_master_switch_disabled_start_skipped(self):
         """TC-NOTIFY-52: enabled=False 时 start() 不创建后台任务、也不重连 WebSocket"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         cfg = _make_wecom_config()
         cfg.enabled = False
@@ -709,7 +709,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_53_wecom_update_config_returns_changed(self):
         """TC-NOTIFY-53: update_config 返回 enabled 状态是否变化（用于触发启停切换）"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         cfg = _make_wecom_config()
         cfg.enabled = True
@@ -744,7 +744,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_54_wecom_master_switch_toggle_allow_queue(self):
         """TC-NOTIFY-54: 关闭 → 开启后，事件可重新入队（验证状态可逆）"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         cfg = _make_wecom_config()
         cfg.enabled = False
@@ -771,7 +771,7 @@ class TestWeComNotifierDeduplication:
 
     async def test_tc_notify_22_wecom_unknown_printer_ignored(self):
         """TC-NOTIFY-22: 未知的 serial 不入队，不崩溃"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         notifier = WeComNotifier(_make_wecom_config(), [printer_cfg])
@@ -826,7 +826,7 @@ class TestDoubleLayerDeduplication:
         这是正确的行为，因为 _check_progress_events 先于 _handle_state_change 执行。
         """
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -870,7 +870,7 @@ class TestDoubleLayerDeduplication:
         """TC-NOTIFY-25: monitor 和 wecom 双层去重，共同防止重复"""
         _, calls = broadcast_calls
 
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -964,7 +964,7 @@ class TestProgress50Notification:
     async def test_tc_notify_42_progress50_resets_on_new_job(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-42: 新 gcode 任务重置 progress50 标记，可再次触发"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         cfg = _make_wecom_config()
         cfg.layer3 = False  # 隔离 layer3
@@ -990,7 +990,7 @@ class TestProgress50Notification:
 
     async def test_tc_notify_43_progress50_disabled_in_config(self):
         """TC-NOTIFY-43: 配置 progress50=False 时不入队；wecom 层对 progress50 去重"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
 
         # 禁用 progress50：不入队
@@ -1036,7 +1036,7 @@ class TestGcodeNormalization:
         首条 MQTT 消息带 .3mf 扩展名被误判为新任务而重置标记、补发通知。
         """
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -1105,7 +1105,7 @@ class TestNewJobResetTiming:
     async def test_tc_notify_49_reprint_same_file_resets(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-49: 打完后重打同名文件，FINISH→RUNNING 重置两层标记可再次通知"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -1197,7 +1197,7 @@ class TestHMSErrorNotification:
     async def test_tc_notify_30_same_hms_error_not_duplicated(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-30: 同一 HMS 错误不重复通知（去重逻辑在 wecom.notify() 中）"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         cfg = _make_wecom_config()
         cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
@@ -1225,7 +1225,7 @@ class TestHMSErrorNotification:
     async def test_tc_notify_31_multiple_hms_errors_merged(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-31: 多个 HMS 错误合并为一条通知"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         cfg = _make_wecom_config()
         cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
@@ -1253,7 +1253,7 @@ class TestHMSErrorNotification:
     async def test_tc_notify_32_new_job_resets_hms_error(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-32: 新任务开始时 HMS 错误状态重置，可再次通知"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         cfg = _make_wecom_config()
         cfg.layer3 = False  # 隔离 HMS 行为：layer>=3 会额外触发 layer3
@@ -1303,7 +1303,7 @@ class TestHMSErrorNotification:
     async def test_tc_notify_34_hms_error_disabled_in_config(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-34: 配置中 error=false 时不发送错误通知"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         cfg = _make_wecom_config()
         cfg.error = False  # 禁用
@@ -1325,7 +1325,7 @@ class TestHMSErrorNotification:
     async def test_tc_notify_35_multiple_printers_hms_independent(self, mock_manager, mock_db, broadcast_calls):
         """TC-NOTIFY-35: 多台打印机 HMS 错误独立追踪，互不干扰"""
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         p1_cfg = PrinterConfig(serial="S001", name="P1")
         p2_cfg = PrinterConfig(serial="S002", name="P2")
         cfg = _make_wecom_config()
@@ -1362,7 +1362,7 @@ class TestHMSErrorNotification:
         因此 _handle_state_change 在检测到 FINISH 时直接触发 completed 通知。
         """
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -1386,7 +1386,7 @@ class TestHMSErrorNotification:
         都需要能再次触发 completed 通知。
         """
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)
@@ -1420,7 +1420,7 @@ class TestHMSErrorNotification:
         HMS 错误检测独立于 state!=RUNNING 的检查，任何状态下的错误都能被捕获。
         """
         _, calls = broadcast_calls
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         wecom = WeComNotifier(_make_wecom_config(), [printer_cfg])
         wecom._queue = asyncio.Queue(maxsize=10)

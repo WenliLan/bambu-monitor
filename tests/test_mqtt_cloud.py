@@ -1,7 +1,7 @@
 """云端 MQTT 客户端回归测试
 
 覆盖 v0.5.17 部署反馈中的两个 P0/P1 缺陷：
-  TC-MQTT-01: client_id 唯一且带 bumbo-monitor 前缀，不与打印机自身会话冲突
+  TC-MQTT-01: client_id 唯一且带 bambu-monitor 前缀，不与打印机自身会话冲突
   TC-MQTT-02: connect() 必须等到 CONNACK 才返回，失败/超时抛出 MQTTError
 """
 
@@ -10,8 +10,8 @@ import types
 
 import pytest
 
-from bumbo_stats.printer import mqtt_cloud
-from bumbo_stats.printer.mqtt_cloud import CloudMQTTClient, MQTTError
+from bambu_monitor.printer import mqtt_cloud
+from bambu_monitor.printer.mqtt_cloud import CloudMQTTClient, MQTTError
 
 
 class FakeReasonCode:
@@ -86,7 +86,7 @@ def test_tc_mqtt_01_client_id_unique_and_namespaced():
     a = CloudMQTTClient.make_client_id("SERIAL123")
     b = CloudMQTTClient.make_client_id("SERIAL123")
 
-    assert a.startswith("bumbo-monitor-SERIAL123-")
+    assert a.startswith("bambu-monitor-SERIAL123-")
     assert a != b
     assert len(a.rsplit("-", 1)[1]) == 8
     assert not a.startswith("bambu-client-")
@@ -99,7 +99,7 @@ def test_tc_mqtt_01_connect_passes_generated_client_id(fake_mqtt):
 
     instance = fake_mqtt.instances[-1]
     assert instance.kwargs["client_id"] == client.client_id
-    assert instance.kwargs["client_id"].startswith("bumbo-monitor-S001-")
+    assert instance.kwargs["client_id"].startswith("bambu-monitor-S001-")
     client.disconnect()
 
 

@@ -16,8 +16,8 @@
 
 import pytest
 
-from bumbo_stats.config import PrinterConfig
-from bumbo_stats.models import PrinterState
+from bambu_monitor.config import PrinterConfig
+from bambu_monitor.models import PrinterState
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ def configs():
 class TestPrinterManagerInit:
     def test_tc_mgr_01_init(self, configs):
         """TC-MGR-01: 初始化配置映射"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         assert mgr.get_config("S001").name == "P1"
         assert mgr.get_config("S002").name == "P2"
@@ -39,7 +39,7 @@ class TestPrinterManagerInit:
 
     def test_tc_mgr_02_properties(self, configs):
         """TC-MGR-02: serials 和 printer_names"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         assert set(mgr.serials) == {"S001", "S002"}
         assert mgr.printer_names == {"S001": "P1", "S002": "P2"}
@@ -48,7 +48,7 @@ class TestPrinterManagerInit:
 class TestPrinterManagerStatus:
     def test_tc_mgr_03_offline_status(self, configs):
         """TC-MGR-03: 未连接的打印机返回 OFFLINE（从缓存）"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         # 不调用 connect_all，直接获取状态
         status = mgr.get_status("S001")
@@ -57,7 +57,7 @@ class TestPrinterManagerStatus:
 
     def test_tc_mgr_04_get_all_statuses_includes_offline(self, configs):
         """TC-MGR-04: get_all_statuses 包含所有配置的打印机"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         results = mgr.get_all_statuses()
         assert "S001" in results
@@ -66,7 +66,7 @@ class TestPrinterManagerStatus:
 
     def test_tc_mgr_05_parse_status_cloud_mqtt(self, configs):
         """TC-MGR-05: _parse_status 正确解析云端 MQTT 数据（含 subtask_name）"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         data = {
             "gcode_state": "RUNNING",
@@ -95,7 +95,7 @@ class TestPrinterManagerStatus:
 
     def test_tc_mgr_06_parse_status_gcode_file(self, configs):
         """TC-MGR-06: _parse_status 同时支持 gcode_file 字段"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         data = {
             "gcode_state": "IDLE",
@@ -118,7 +118,7 @@ class TestHMSFieldParsing:
 
     def test_tc_mgr_11_parse_hms_attr_and_code(self, configs):
         """TC-MGR-11: _parse_status 解析 attr+code 得到 attr/raw_code/severity"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         # 实际案例: 右挤出机喷嘴温控异常
         #   attr = 0x03000200  -> 注册表中 0x03000200
@@ -141,7 +141,7 @@ class TestHMSFieldParsing:
 
     def test_tc_mgr_12_severity_from_code_high16(self, configs):
         """TC-MGR-12: code 高 16 位 -> severity (fatal/serious/common)"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         cases = [
             # (attr, code, expected_severity, expected_short_code)
@@ -167,7 +167,7 @@ class TestHMSFieldParsing:
 
     def test_tc_mgr_13_compat_legacy_fields(self, configs):
         """TC-MGR-13: 兼容老字段 err_code / severity / err_msg"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         data = {
             "gcode_state": "RUNNING",
@@ -188,7 +188,7 @@ class TestHMSFieldParsing:
 
     def test_tc_mgr_14_hms_empty_and_invalid(self, configs):
         """TC-MGR-14: 空 hms / 非 list / 非 dict 均不报错"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         # 空
         s1 = mgr._parse_status("S001", "P1", {"gcode_state": "IDLE", "hms": []})
@@ -221,7 +221,7 @@ class TestPrinterManagerDynamicReload:
 
     async def test_tc_mgr_07_add_printer_visible_immediately(self, configs):
         """TC-MGR-07: add_printer 后立刻可见（serials / printer_names / get_all_statuses）"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         new_printer = PrinterConfig(
             name="NewP", serial="S003", ip="1.2.3.6", access_code="0002",
@@ -240,7 +240,7 @@ class TestPrinterManagerDynamicReload:
 
     async def test_tc_mgr_08_remove_printer_visible_immediately(self, configs):
         """TC-MGR-08: remove_printer 后立刻不可见"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
 
         await mgr.remove_printer("S001")
@@ -255,7 +255,7 @@ class TestPrinterManagerDynamicReload:
 
     async def test_tc_mgr_09_add_printer_idempotent(self, configs):
         """TC-MGR-09: 重复 add_printer 不会覆盖已有配置（仅跳过）"""
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager(configs)
         duplicate = PrinterConfig(
             name="DifferentName", serial="S001", ip="9.9.9.9", access_code="9999",
@@ -276,7 +276,7 @@ class TestPrinterManagerDynamicReload:
         管理面板调用 reload_printers 之后，S002 必须出现在 manager 中。
         修复前：add_printer 未 await，S002 不会出现在 _configs 中。
         """
-        from bumbo_stats.printer.manager import PrinterManager
+        from bambu_monitor.printer.manager import PrinterManager
         mgr = PrinterManager([configs[0]])  # 只有 S001
 
         # 模拟 _reload_printers_impl 核心循环（修复后用 await）

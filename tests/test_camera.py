@@ -15,8 +15,8 @@
 import pytest
 from unittest.mock import patch
 
-from bumbo_stats.config import PrinterConfig
-from bumbo_stats.printer.camera import CameraManager, PROTO_JPEG, PROTO_RTSPS
+from bambu_monitor.config import PrinterConfig
+from bambu_monitor.printer.camera import CameraManager, PROTO_JPEG, PROTO_RTSPS
 
 
 @pytest.fixture
@@ -68,8 +68,8 @@ class TestProtocolDispatch:
     async def test_tc_cam_05_jpeg_dispatch(self, cam_configs):
         """TC-CAM-05: 6000 可达 -> JPEG 协议, 走本地 JPEGFrameStream"""
         cam = CameraManager(cam_configs)
-        with patch("bumbo_stats.printer.camera._tcp_reachable", return_value=True), \
-             patch("bumbo_stats.printer.jpegstream.JPEGFrameStream") as stream_cls:
+        with patch("bambu_monitor.printer.camera._tcp_reachable", return_value=True), \
+             patch("bambu_monitor.printer.jpegstream.JPEGFrameStream") as stream_cls:
             stream_cls.return_value.__enter__.return_value.get_frame.return_value = b"jpeg-frame"
             frame = await cam.capture_fresh_frame("AC12309BH109")
         assert cam._protocol.get("AC12309BH109") == PROTO_JPEG
@@ -80,7 +80,7 @@ class TestProtocolDispatch:
         """TC-CAM-05b: JPEG 分支返回 bytes 时刷新缓存"""
         cam = CameraManager(cam_configs)
         cam._protocol["AC12309BH109"] = PROTO_RTSPS  # 借用 RTSPS 分支验证缓存写入
-        with patch("bumbo_stats.printer.camera.capture_rtsp_frame", return_value=b"jpg-data"):
+        with patch("bambu_monitor.printer.camera.capture_rtsp_frame", return_value=b"jpg-data"):
             frame = await cam.capture_fresh_frame("AC12309BH109")
         assert frame == b"jpg-data"
         assert await cam.get_frame("AC12309BH109") == b"jpg-data"
@@ -92,9 +92,9 @@ class TestProtocolDispatch:
         def fake_reachable(ip, port, timeout=1.5):
             return port == 322
 
-        with patch("bumbo_stats.printer.camera._tcp_reachable", side_effect=fake_reachable), \
-             patch("bumbo_stats.printer.camera.find_ffmpeg", return_value="ffmpeg"), \
-             patch("bumbo_stats.printer.camera.capture_rtsp_frame", return_value=b"rtsp-jpg") as m:
+        with patch("bambu_monitor.printer.camera._tcp_reachable", side_effect=fake_reachable), \
+             patch("bambu_monitor.printer.camera.find_ffmpeg", return_value="ffmpeg"), \
+             patch("bambu_monitor.printer.camera.capture_rtsp_frame", return_value=b"rtsp-jpg") as m:
             frame = await cam.capture_fresh_frame("BL-P001-001")
         assert cam._protocol.get("BL-P001-001") == PROTO_RTSPS
         assert frame == b"rtsp-jpg"
@@ -107,8 +107,8 @@ class TestProtocolDispatch:
         def fake_reachable(ip, port, timeout=1.5):
             return port == 322
 
-        with patch("bumbo_stats.printer.camera._tcp_reachable", side_effect=fake_reachable), \
-             patch("bumbo_stats.printer.camera.find_ffmpeg", return_value=None):
+        with patch("bambu_monitor.printer.camera._tcp_reachable", side_effect=fake_reachable), \
+             patch("bambu_monitor.printer.camera.find_ffmpeg", return_value=None):
             frame = await cam.capture_fresh_frame("BL-P001-001")
         assert frame is None
         # 未缓存协议: 对方装好 ffmpeg 后无需重启即可启用
@@ -118,7 +118,7 @@ class TestProtocolDispatch:
         """TC-CAM-08: 协议只探测一次, 后续采集复用缓存"""
         cam = CameraManager(cam_configs)
         cam._protocol["AC12309BH109"] = PROTO_JPEG
-        with patch("bumbo_stats.printer.camera._tcp_reachable") as probe:
+        with patch("bambu_monitor.printer.camera._tcp_reachable") as probe:
             await cam._capture_one("AC12309BH109")
         probe.assert_not_called()
 

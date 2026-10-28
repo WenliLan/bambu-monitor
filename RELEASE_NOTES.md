@@ -1,4 +1,4 @@
-bumbo_stats v{VERSION} 正式发布包
+bambu_monitor v{VERSION} 正式发布包
 ================================
 
 (本文件由 build_release.ps1 在打包时注入版本号，模板在源码仓库 RELEASE_NOTES.md)
@@ -7,7 +7,7 @@ bumbo_stats v{VERSION} 正式发布包
 
 一、致命问题（P0）
   · 云端 MQTT 不再复用打印机本体身份：监控端改用独立唯一 client_id
-    (bumbo-monitor-<serial>-<随机后缀>)，并等待 CONNACK 后再请求状态，
+    (bambu-monitor-<serial>-<随机后缀>)，并等待 CONNACK 后再请求状态，
     彻底消除"服务看似启动成功、状态永不更新"的顶号掉线问题。
 
 二、流程与假信号（P1）
@@ -48,7 +48,7 @@ bumbo_stats v{VERSION} 正式发布包
   · 启动批处理改为纯 ASCII；.gitattributes 强制 *.bat/*.ps1 使用 CRLF。
 
 【包内容】
-  bumbo_stats/               主程序(FastAPI + 自研 MQTT + SQLite + Web 面板)
+  bambu_monitor/               主程序(FastAPI + 自研 MQTT + SQLite + Web 面板)
   bambu_ai_deploy_dinoknn/   AI 缺陷检测器(含 DINOv2 权重 + 预训练特征库 gallery/)
                              scripts/ 内提供 detect_image / init_gallery / monitor
                              watcher.py 可热追加用户照片到特征库
@@ -62,7 +62,7 @@ bumbo_stats v{VERSION} 正式发布包
   $env:PYTHONUTF8 = "1"                      # 仅中文 Windows 需要
   pip install ".[notify]"                    # 要 AI 检测改 ".[notify,ai]"
   copy printers.yaml.example printers.yaml   # 填写 serial(15-18 位标签原值) 等
-  bumbo-stats serve                          # 打开 http://127.0.0.1:8000
+  bambu-monitor serve                          # 打开 http://127.0.0.1:8000
 
   浏览器内：设置管理员密码 → 设置 → 云端登录(回填验证码) → 设置 → 打印机增删。
   自检：GET /healthz 返回 200；日志每 30 秒一条「状态同步 ... 层 x/y 进度 z%」。

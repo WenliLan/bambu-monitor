@@ -1,4 +1,4 @@
-# Bumbo Stats — 拓竹3D打印机云端监控系统 设计文档
+# Bambu Monitor — 拓竹3D打印机云端监控系统 设计文档
 
 > **版本**: 0.5.2 | **最后更新**: 2026-07-11
 
@@ -6,7 +6,7 @@
 
 ## 一、项目概述
 
-Bumbo Stats 是一个**拓竹 (Bambu Lab) 3D 打印机多机云端监控面板**，通过拓竹云端 MQTT 协议实时获取多台打印机的状态数据，提供 Web Dashboard 展示实时状态、摄像头画面、今日产能饱和度和近 30 天产能趋势图。
+Bambu Monitor 是一个**拓竹 (Bambu Lab) 3D 打印机多机云端监控面板**，通过拓竹云端 MQTT 协议实时获取多台打印机的状态数据，提供 Web Dashboard 展示实时状态、摄像头画面、今日产能饱和度和近 30 天产能趋势图。
 
 ### 核心能力
 
@@ -42,7 +42,7 @@ Bumbo Stats 是一个**拓竹 (Bambu Lab) 3D 打印机多机云端监控面板**
 
 #### FR-01: 拓竹云账号认证
 - 支持中国区（短信验证码）和全球区（邮箱密码）登录
-- Token 本地持久化（`~/.bumbo_token`）
+- Token 本地持久化（`~/.bambu_monitor_token`）
 - Token 自动验证和刷新
 
 #### FR-02: 多打印机状态监控
@@ -128,14 +128,14 @@ Bumbo Stats 是一个**拓竹 (Bambu Lab) 3D 打印机多机云端监控面板**
 ## 三、文件层级
 
 ```
-bumbo_stats/
+bambu_monitor/
 ├── pyproject.toml                      # 项目元数据与依赖声明
 ├── printers.yaml                       # 运行时配置文件
 ├── start_service.bat                   # Windows 自启动脚本
 ├── register_autostart.ps1              # 计划任务注册脚本
 ├── DESIGN.md                           # 本设计文档
 │
-├── bumbo_stats/                        # 主包
+├── bambu_monitor/                        # 主包
 │   ├── __init__.py                     # 包声明，__version__
 │   ├── main.py                         # CLI 入口 (login / serve)
 │   ├── config.py                       # YAML 配置加载 + Pydantic 模型
@@ -193,7 +193,7 @@ bumbo_stats/
 │   └── test_wecom_notify.py            # 企业微信通知 (38)
 │
 └── data/                               # 运行时数据
-    └── bumbo_stats.db                  # SQLite 数据库文件
+    └── bambu_monitor.db                  # SQLite 数据库文件
 ```
 
 ---
@@ -405,7 +405,7 @@ POST https://api.bambulab.cn/v1/user-service/user/login
   → { accessToken, refreshToken }
 
 # Token 持久化
-TokenManager.save_token() → ~/.bumbo_token (JSON)
+TokenManager.save_token() → ~/.bambu_monitor_token (JSON)
 TokenManager.load_token() → 读取并验证
 ```
 
@@ -453,8 +453,8 @@ Windows 计划任务 (Task Scheduler)
 └── 日志: startup.log
 
 start_service.bat:
-  cd /d "H:\QoderWorkspace\bumbo_stats"
-  H:\anaconda\python.exe -m bumbo_stats.main serve --host 0.0.0.0 --debug
+  cd /d "H:\QoderWorkspace\bambu_monitor"
+  H:\anaconda\python.exe -m bambu_monitor.main serve --host 0.0.0.0 --debug
 ```
 
 ---
@@ -654,7 +654,7 @@ python -m pytest tests/ -v
 
 # 核心模块 + 覆盖率
 python -m pytest tests/test_database.py tests/test_monitor.py tests/test_numerical.py \
-    --cov=bumbo_stats.database --cov=bumbo_stats.printer.monitor \
+    --cov=bambu_monitor.database --cov=bambu_monitor.printer.monitor \
     --cov-report=term-missing
 
 # 预期结果: 163 passed, database.py 100%, monitor.py 100%
@@ -669,7 +669,7 @@ python -m pytest tests/test_database.py tests/test_monitor.py tests/test_numeric
 ```yaml
 cloud:                             # 拓竹云账号（必填）
   username: "手机号/邮箱"
-  token_file: "~/.bumbo_token"     # Token 存储路径
+  token_file: "~/.bambu_monitor_token"     # Token 存储路径
   mqtt_broker: "cn"                # cn(中国) / us(全球)
 
 printers:                          # 打印机列表（必填）
@@ -681,7 +681,7 @@ printers:                          # 打印机列表（必填）
 
 settings:                          # 全局设置（可选）
   camera_interval: 3              # 摄像头刷新间隔（秒）
-  db_path: "./data/bumbo_stats.db"
+  db_path: "./data/bambu_monitor.db"
   host: "0.0.0.0"
   port: 8000
 
@@ -698,13 +698,13 @@ wecom:                            # 企业微信通知（可选）
 
 ```bash
 # 首次登录（获取 Token）
-python -m bumbo_stats.main login
+python -m bambu_monitor.main login
 
 # 启动服务
-python -m bumbo_stats.main serve --host 0.0.0.0 --debug
+python -m bambu_monitor.main serve --host 0.0.0.0 --debug
 
 # Windows 开机自启动（管理员权限注册一次）
-schtasks /create /tn "BumboStats" /tr "H:\QoderWorkspace\bumbo_stats\start_service.bat" /sc onlogon /rl highest /f
+schtasks /create /tn "BambuMonitor" /tr "H:\QoderWorkspace\bambu_monitor\start_service.bat" /sc onlogon /rl highest /f
 ```
 
 ---

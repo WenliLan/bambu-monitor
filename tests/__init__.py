@@ -1,1 +1,1 @@
-"""bumbo_stats 测试包"""
+"""bambu_monitor 测试包"""

@@ -30,8 +30,8 @@ import time
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
-from bumbo_stats.models import PrinterState, PrinterStatus, HMSError
-from bumbo_stats.printer.feishu import (
+from bambu_monitor.models import PrinterState, PrinterStatus, HMSError
+from bambu_monitor.printer.feishu import (
     FeishuNotifier, FeishuConfig, _PrinterNotifState,
     EVENT_LAYER3, EVENT_PROGRESS50, EVENT_COMPLETED, EVENT_ERROR, EVENT_AI_ALARM,
 )
@@ -81,7 +81,7 @@ def mock_camera():
 class TestFeishuNotifier:
     def test_tc_feishu_01_init(self, mock_camera):
         """TC-FEISHU-01: FeishuNotifier 初始化"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -93,7 +93,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_02_no_start_without_config(self):
         """TC-FEISHU-02: 未配置 app_id/app_secret 时不启动"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = FeishuConfig(app_id="", app_secret="")
@@ -107,7 +107,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_03_layer3_event_queued(self, mock_camera):
         """TC-FEISHU-03: layer3 事件入队"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -121,7 +121,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_04_completed_event_queued(self, mock_camera):
         """TC-FEISHU-04: completed 事件入队"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -135,7 +135,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_05_error_event_queued(self, mock_camera):
         """TC-FEISHU-05: error 事件入队"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -150,7 +150,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_06_layer3_deduplicated(self, mock_camera):
         """TC-FEISHU-06: 同一 layer3 事件去重"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -167,7 +167,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_07_completed_deduplicated(self, mock_camera):
         """TC-FEISHU-07: 同一 completed 事件去重"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -184,7 +184,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_08_new_job_resets_layer3(self, mock_camera):
         """TC-FEISHU-08: 新任务重置 layer3 标记"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -203,7 +203,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_09_new_job_resets_completed(self, mock_camera):
         """TC-FEISHU-09: 新任务重置 completed 标记"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -222,7 +222,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_10_hms_errors_merged(self, mock_camera):
         """TC-FEISHU-10: HMS 多个错误合并为一条通知"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -242,7 +242,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_11_same_hms_error_not_duplicated(self, mock_camera):
         """TC-FEISHU-11: 同一 HMS 错误不重复通知"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -261,7 +261,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_12_disabled_event_no_queue(self, mock_camera):
         """TC-FEISHU-12: 禁用的通知事件不入队"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -276,7 +276,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_13_unknown_printer_ignored(self, mock_camera):
         """TC-FEISHU-13: 未知打印机被忽略"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -290,7 +290,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_14_queue_full_drops(self, mock_camera):
         """TC-FEISHU-14: 队列满时优雅丢弃"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -334,7 +334,7 @@ class TestFeishuNotifier:
         （无扩展名）。若 reset_if_new_job 不归一化，形式变化就会被误判
         为新任务，导致 layer3/progress50/completed 在同一任务内多次重发。
         """
-        from bumbo_stats.printer.wecom import normalize_gcode
+        from bambu_monitor.printer.wecom import normalize_gcode
 
         # 场景1: 先收到带扩展名的 gcode，并已发送 layer3
         state = _PrinterNotifState()
@@ -386,7 +386,7 @@ class TestFeishuNotifier:
           2. 不能出现 ``**xxx**`` 加粗标记（飞书会原样显示星号）
           3. HMS 错误保留中文名 + 原始消息
         """
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -448,7 +448,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_17_progress50_event_queued(self, mock_camera):
         """TC-FEISHU-17: progress50 事件入队"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -464,7 +464,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_18_progress50_deduplicated(self, mock_camera):
         """TC-FEISHU-18: 同一 progress50 事件去重"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -481,7 +481,7 @@ class TestFeishuNotifier:
 
     def test_tc_feishu_19_progress50_disabled_no_queue(self, mock_camera):
         """TC-FEISHU-19: 禁用 progress50 时不入队"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -548,7 +548,7 @@ class TestFeishuCommands:
 
     def test_tc_feishu_17_parsed_and_queued(self, mock_camera):
         """TC-FEISHU-17: 群聊 @机器人 发“截图”时解析并入队 snapshot 指令"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -568,7 +568,7 @@ class TestFeishuCommands:
 
     def test_tc_feishu_18_rejects_non_group_or_no_mention(self, mock_camera):
         """TC-FEISHU-18: 非群聊 / 未 @机器人 被忽略；无法识别时给出反馈（P2-8）"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -599,7 +599,7 @@ class TestFeishuCommands:
 
     def test_tc_feishu_19_cooldown_blocks_duplicate(self, mock_camera):
         """TC-FEISHU-19: 冷却窗口内重复指令不再执行，仅回冷却提示（P2-8）"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -627,7 +627,7 @@ class TestFeishuCommands:
           2. set_threshold 内部回调 on_threshold_changed 被调用，传入新阈值
           3. 返回文本包含“已更新”和新阈值
         """
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -675,7 +675,7 @@ class TestFeishuCommands:
 
     async def test_tc_feishu_21_dispatcher_routes(self, mock_camera):
         """TC-FEISHU-21: _process_command 派发器路由五个指令到对应 _cmd_* 方法"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()
@@ -715,7 +715,7 @@ class TestFeishuCommands:
 
     async def test_tc_feishu_22_unbound_ai_guard(self, mock_camera):
         """TC-FEISHU-22: 未绑定 ai_guard 时阈值指令返回友好提示，不崩"""
-        from bumbo_stats.config import PrinterConfig
+        from bambu_monitor.config import PrinterConfig
 
         printer_cfg = PrinterConfig(serial="S001", name="P1")
         config = _make_feishu_config()

@@ -1,4 +1,4 @@
-# Bumbo Stats
+# Bambu Monitor
 
 拓竹(Bambu Lab)3D 打印机**多机云端监控面板**。一台电脑监控整个打印农场：实时摄像头画面、打印状态、温度/进度/层数、产能统计，支持企业微信/飞书消息推送与 AI 打印缺陷检测。
 
@@ -24,7 +24,7 @@ Windows 额外注意：
 - 中文区域建议先设 `$env:PYTHONUTF8="1"`，否则个别源码包在 cp936 下构建会报 `UnicodeDecodeError`（v0.5.18 已移除会触发该问题的第三方传递依赖，但保留此设置更稳妥）
 - 安装 `[ai]`（torch）需要 **VC++ 2015-2022 x64 运行库 ≥ 14.36**；版本过旧会在 `import torch` 时报 `OSError [WinError 1114] ... c10.dll`
 - 大陆网络可选用清华镜像：`-i https://pypi.tuna.tsinghua.edu.cn/simple`（第三方索引，信任与否请自行判断）
-- **安装/重装前先退出所有 `bumbo-stats serve` / `login` 进程**，否则 Windows 会因 exe 被占用留下半成品包
+- **安装/重装前先退出所有 `bambu-monitor serve` / `login` 进程**，否则 Windows 会因 exe 被占用留下半成品包
 
 ## 快速开始
 
@@ -43,7 +43,7 @@ copy printers.yaml.example printers.yaml      # Windows
 cp printers.yaml.example printers.yaml        # Linux/macOS
 
 # 3. 启动服务（默认只监听 127.0.0.1:8000）
-bumbo-stats serve
+bambu-monitor serve
 ```
 
 浏览器打开 `http://127.0.0.1:8000`：
@@ -53,7 +53,7 @@ bumbo-stats serve
 3. 进入 **设置 → 打印机** 添加/删除设备（即时生效，无需重启）。
 
 > **v0.5.18 起无 Token 也能启动**：服务会正常监听，面板显示"未连接拓竹云"，在网页里登录即可。
-> CLI 登录仍然可用（`bumbo-stats login`），但不再是启动的前置条件。
+> CLI 登录仍然可用（`bambu-monitor login`），但不再是启动的前置条件。
 >
 > 需要局域网其他设备访问面板时，把 `printers.yaml` 的 `settings.host` 改为 `0.0.0.0`
 >（或启动时加 `--host 0.0.0.0`）。**这会把实时画面和数据暴露给同网段设备**，务必先设好管理员密码并确认网络可信。
@@ -108,7 +108,7 @@ $EDITOR printers.yaml
 ### 2. 启动与登录
 
 ```bash
-bumbo-stats serve          # 默认 http://127.0.0.1:8000
+bambu-monitor serve          # 默认 http://127.0.0.1:8000
 ```
 
 启动后：
@@ -120,14 +120,14 @@ bumbo-stats serve          # 默认 http://127.0.0.1:8000
 也可以继续用 CLI 登录（同样 ⛔ 需要人类回填验证码）：
 
 ```bash
-bumbo-stats login                     # cn 提示手机号，us 提示邮箱
-# 成功标志：~/.bumbo_token 生成（JSON，含 region 与 token）
+bambu-monitor login                     # cn 提示手机号，us 提示邮箱
+# 成功标志：~/.bambu_monitor_token 生成（JSON，含 region 与 token）
 ```
 
 ### 3. 部署自检（逐条验证，全过即成功）
 
-1. `bumbo-stats --version` 有输出
-2. 启动横幅出现 `Bumbo Stats v<版本>`、`监控 N 台打印机`、面板地址，以及**配置文件与日志文件的绝对路径**
+1. `bambu-monitor --version` 有输出
+2. 启动横幅出现 `Bambu Monitor v<版本>`、`监控 N 台打印机`、面板地址，以及**配置文件与日志文件的绝对路径**
 3. `curl http://127.0.0.1:8000/healthz` 返回 200；未登录云端时 `status` 为 `degraded`，登录后为 `ok`（该端点公开，便于外部探针）
 4. `GET /login` 返回 200；`GET /api/status` 未登录时应为 **401**（鉴权生效，属正常）
 5. **实时链路（唯一硬证据）**：日志每 30 秒一条
@@ -151,7 +151,7 @@ bumbo-stats login                     # cn 提示手机号，us 提示邮箱
 
 ### 4. 必须知道的坑
 
-- ⛔ **网页云端登录 / CLI `login` 都需要人类回填验证码**，Agent 不能自动完成；Token 落在 `~/.bumbo_token`
+- ⛔ **网页云端登录 / CLI `login` 都需要人类回填验证码**，Agent 不能自动完成；Token 落在 `~/.bambu_monitor_token`
 - **不再需要"先 login 再 serve"**：无 Token 会降级启动，先在网页登录即可
 - `pip install .` 是非 editable 安装：修改项目根源码对已安装 CLI 无效；开发调试请 `pip install -e ".[dev]"`
 - **改 `printers.yaml` 前先停 `serve`**：面板保存设置时只回写本次修改的段并保留 `.bak`，但运行期手工编辑仍可能被覆盖；增删打印机优先用网页 **设置 → 打印机**
@@ -169,7 +169,7 @@ bumbo-stats login                     # cn 提示手机号，us 提示邮箱
 
 | 段落 | 作用 | 关键字段 |
 |---|---|---|
-| `cloud` | 拓竹云账号 | `token_file`(默认 `~/.bumbo_token`)、`mqtt_broker`(`cn`/`us`，须与账号区域一致) |
+| `cloud` | 拓竹云账号 | `token_file`(默认 `~/.bambu_monitor_token`)、`mqtt_broker`(`cn`/`us`，须与账号区域一致) |
 | `printers` | 打印机列表 | `name`、`serial`(15-18 位标签原值)、`ip`(摄像头用)、`access_code`(打印机管理页获取)、`location` |
 | `settings` | 服务 | `host`(默认 `127.0.0.1`)、`port`、`db_path`、`camera_interval`、`log_dir`(默认 `./logs`)、`dashboard_url` |
 | `wecom` | 企业微信机器人 | `enabled`、`bot_id`、`secret`、`chatid`(留空自动发现)及各事件开关 |
@@ -265,7 +265,7 @@ python scripts/monitor.py --source 0        # 需 pip install opencv-python
 ```
 
 - **源码仓库方式运行**：自动探测，无需配置
-- **pip 安装方式运行**：在发布包根目录启动 `bumbo-stats serve` 即可自动探测；
+- **pip 安装方式运行**：在发布包根目录启动 `bambu-monitor serve` 即可自动探测；
   若在其他目录运行，需指定 `ai_guard.deploy_dir` 或 `BUMBO_AI_DEPLOY_DIR`
 - 目录不存在或依赖缺失时 AI 功能自动禁用，不影响其他模块
 
@@ -287,7 +287,7 @@ python scripts/monitor.py --source 0        # 需 pip install opencv-python
 | 现象 | 处理 |
 |---|---|
 | 启动报"配置文件不存在" | 未复制 `printers.yaml.example` 为 `printers.yaml` |
-| 面板显示"未连接拓竹云" | 进 设置 → 云端 登录；或 CLI `bumbo-stats login`。账号区域要与 `mqtt_broker` 一致（cn 手机号 / us 邮箱） |
+| 面板显示"未连接拓竹云" | 进 设置 → 云端 登录；或 CLI `bambu-monitor login`。账号区域要与 `mqtt_broker` 一致（cn 手机号 / us 邮箱） |
 | `curl /api/printers` 返回 401 | 正常：接口已鉴权。先登录拿 Cookie，或看 `/healthz` |
 | 状态一直 OFFLINE / 不更新 | 看 `/healthz` 的 `cloud.authenticated` 与 `printers[].mqtt_connected`；确认 Token 未失效、区域正确、`cn.mqtt.bambulab.com:8883` 可达 |
 | 日志里找不到 `logs/app.log` | 看启动横幅打印的"日志文件"绝对路径；路径由 `settings.log_dir` / `BUMBO_LOG_DIR` 决定 |
@@ -307,11 +307,11 @@ python scripts/monitor.py --source 0        # 需 pip install opencv-python
 pip install -e ".[dev]"
 python -m pytest tests/            # 全量测试
 python -m pytest tests/test_database.py tests/test_monitor.py -x   # 核心子集
-ruff check bumbo_stats tests
+ruff check bambu_monitor tests
 ```
 
-代码入口：`bumbo_stats/main.py`（CLI）、`bumbo_stats/api/`（FastAPI 路由/WebSocket）、
-`bumbo_stats/printer/`（云端 MQTT 状态机、通知、AI 守卫）、`bumbo_stats/cloud_api.py`（自研云端 REST）。
+代码入口：`bambu_monitor/main.py`（CLI）、`bambu_monitor/api/`（FastAPI 路由/WebSocket）、
+`bambu_monitor/printer/`（云端 MQTT 状态机、通知、AI 守卫）、`bambu_monitor/cloud_api.py`（自研云端 REST）。
 
 发布包**不含** `tests/` 与开发文档（`AGENTS.md` / `DESIGN.md` / `SECURITY_REVIEW.md`）。
 

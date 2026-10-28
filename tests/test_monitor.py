@@ -33,8 +33,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 
-from bumbo_stats.models import PrinterState, PrinterStatus
-from bumbo_stats.printer.monitor import PrintMonitor
+from bambu_monitor.models import PrinterState, PrinterStatus
+from bambu_monitor.printer.monitor import PrintMonitor
 
 
 def _make_status(serial, state, gcode_file="test.gcode"):
@@ -69,7 +69,7 @@ def monitor_with_notifiers():
     # 使用真实的 _PrinterNotifState dataclass，默认值是
     # last_gcode="" / layer3_sent=False / progress50_sent=False / completed_sent=False
     # 各测试在调用方法前可显式赋值模拟不同初始状态。
-    from bumbo_stats.printer.wecom import _PrinterNotifState
+    from bambu_monitor.printer.wecom import _PrinterNotifState
     wecom_state = _PrinterNotifState()
     wecom._states = {"S001": wecom_state}
     feishu_state = _PrinterNotifState()
@@ -417,7 +417,7 @@ class TestHMSErrorNotification:
     """
 
     def _status_with_hms(self, severities):
-        from bumbo_stats.models import HMSError
+        from bambu_monitor.models import HMSError
         status = _make_status("S001", PrinterState.RUNNING)
         status.hms_errors = [
             HMSError(
@@ -433,7 +433,7 @@ class TestHMSErrorNotification:
 
     async def test_tc_mon_28_fatal_triggers_notify(self, monitor):
         """TC-MON-28: HMS severity=fatal 触发 _notify_all('error', ...)"""
-        from bumbo_stats.printer.wecom import EVENT_ERROR
+        from bambu_monitor.printer.wecom import EVENT_ERROR
         monitor.wecom_notifier = MagicMock()
         monitor._notify_all = MagicMock()
         status = self._status_with_hms(["fatal"])

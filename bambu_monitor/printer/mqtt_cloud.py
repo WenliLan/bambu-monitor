@@ -2,7 +2,7 @@
 
 替代 bambu-lab-cloud-api 的 MQTTClient，修复 v0.5.17 部署反馈中的：
 - P0-1: client_id 与打印机自身云端会话冲突 → 统一使用随机后缀的
-  ``bumbo-monitor-<serial>-<uuid8>``，不再使用 ``bambu-client-`` 前缀；
+  ``bambu-monitor-<serial>-<uuid8>``，不再使用 ``bambu-client-`` 前缀；
 - P1-2: connect() 立即返回导致后续 pushall 发不出去 → 等待 CONNACK 后
   才向调用方返回成功，失败时抛出带原因的 MQTTError；
 - P2-6/P2-7: 不依赖第三方包，回调签名直接对齐 paho v2，避免
@@ -95,7 +95,7 @@ class CloudMQTTClient:
         打印机自己会以固定 client_id 登录云端，监控端必须使用不同且
         每次进程启动都不同的 id，否则云端会踢掉后登录的一方。
         """
-        return f"bumbo-monitor-{device_id}-{uuid.uuid4().hex[:8]}"
+        return f"bambu-monitor-{device_id}-{uuid.uuid4().hex[:8]}"
 
     @property
     def connected(self) -> bool:

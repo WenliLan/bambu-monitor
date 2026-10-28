@@ -558,7 +558,7 @@ class FeishuNotifier:
 
 {now}
 
-发送者: Bumbo Stats 监控面板
+发送者: Bambu Monitor 监控面板
 
 测试打印机截图:
 {printer_list}

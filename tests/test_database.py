@@ -28,7 +28,7 @@ import pytest
 import aiosqlite
 from datetime import date, datetime, timedelta
 
-from bumbo_stats.database import SECONDS_PER_DAY
+from bambu_monitor.database import SECONDS_PER_DAY
 
 
 @pytest.mark.asyncio

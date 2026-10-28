@@ -1,4 +1,4 @@
-# bumbo_stats 配置文件模板
+# bambu_monitor 配置文件模板
 # 使用方法: 复制本文件为 printers.yaml, 按注释填写各项
 #   Windows: copy printers.yaml.example printers.yaml
 #   Linux/macOS: cp printers.yaml.example printers.yaml
@@ -11,7 +11,7 @@
 #   BUMBO_FEISHU_APP_ID / BUMBO_FEISHU_APP_SECRET / BUMBO_DASHBOARD_URL
 
 cloud:
-  # token_file: ~/.bumbo_token   # 可选, Token 保存路径(默认用户主目录)
+  # token_file: ~/.bambu_monitor_token   # 可选, Token 保存路径(默认用户主目录)
   mqtt_broker: cn                # 拓竹云区域: cn / us, 须与账号注册区域一致
 
 # 打印机列表(可多台)。serial 请照抄机身/包装标签(长度随机型为 15-18 位,
@@ -36,7 +36,7 @@ settings:
   host: 127.0.0.1
   port: 8000                     # Web 服务端口
   camera_interval: 3             # 摄像头帧刷新间隔(秒)
-  db_path: ./data/bumbo_stats.db # SQLite 数据库路径(相对启动时所在目录)
+  db_path: ./data/bambu_monitor.db # SQLite 数据库路径(相对启动时所在目录)
   log_dir: ./logs                # 日志目录(相对启动时所在目录), 文件为 app.log, 按天轮转保留 7 天
   dashboard_url: ""              # 通知消息中"打开监控面板"链接(如 http://192.168.1.50:8000/), 留空则不显示链接
 

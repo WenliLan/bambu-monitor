@@ -10,7 +10,7 @@
 import pytest
 from pathlib import Path
 
-from bumbo_stats.auth import TokenManager
+from bambu_monitor.auth import TokenManager
 
 
 @pytest.fixture

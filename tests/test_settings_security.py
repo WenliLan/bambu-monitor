@@ -25,8 +25,8 @@ import hashlib
 
 from fastapi.testclient import TestClient
 
-from bumbo_stats.config import AppConfig, CloudConfig, PrinterConfig, AppSettings, WeComSettings, UiSettings, load_config
-from bumbo_stats.models import PrinterStatus, PrinterState
+from bambu_monitor.config import AppConfig, CloudConfig, PrinterConfig, AppSettings, WeComSettings, UiSettings, load_config
+from bambu_monitor.models import PrinterStatus, PrinterState
 
 
 def _create_test_app():
@@ -61,7 +61,7 @@ def _create_test_app():
     mock_db.get_monthly_usage_all.return_value = []
     mock_db.get_sessions.return_value = []
 
-    from bumbo_stats.api.app import create_app
+    from bambu_monitor.api.app import create_app
     app = create_app(config=config)
 
     app.state.printer_manager = mock_manager
@@ -180,7 +180,7 @@ class TestConfigStorage:
 
     def test_tc_sec_07_token_file_format(self, tmp_path):
         """TC-SEC-07: Token 存储为 JSON 格式，无额外加密"""
-        from bumbo_stats.auth import TokenManager
+        from bambu_monitor.auth import TokenManager
 
         token_file = tmp_path / "token"
         mgr = TokenManager(str(token_file))
@@ -282,12 +282,12 @@ class TestAuthenticationFlow:
         # 用旧密码登录，拿到随机会话 token
         resp = test_client.post("/api/auth/login", json={"password": "old_password"})
         assert resp.status_code == 200
-        old_token = test_client.cookies.get("bumbo_auth")
+        old_token = test_client.cookies.get("bambu_monitor_auth")
         assert old_token and old_token != cfg.ui.admin_password_hash
 
         resp = test_client.post("/api/settings/password", json={"password": "new_password"})
         assert resp.status_code == 200
-        new_token = test_client.cookies.get("bumbo_auth")
+        new_token = test_client.cookies.get("bambu_monitor_auth")
         assert new_token and new_token != old_token
 
         # 旧哈希值与密码均已更新
@@ -295,9 +295,9 @@ class TestAuthenticationFlow:
         assert cfg.ui.admin_password_hash == new_hash
 
         # 旧会话应已失效；当前客户端换发的新会话仍可用
-        test_client.cookies.set("bumbo_auth", old_token)
+        test_client.cookies.set("bambu_monitor_auth", old_token)
         assert test_client.get("/api/status").status_code == 401
-        test_client.cookies.set("bumbo_auth", new_token)
+        test_client.cookies.set("bambu_monitor_auth", new_token)
         assert test_client.get("/api/status").status_code == 200
 
 
@@ -327,12 +327,12 @@ class TestPublicEndpointsAndSessions:
 
         resp = test_client.post("/api/auth/login", json={"password": "pw1234"})
         assert resp.status_code == 200
-        token = resp.cookies.get("bumbo_auth")
+        token = resp.cookies.get("bambu_monitor_auth")
         assert token
         assert token != cfg.ui.admin_password_hash
         assert len(token) >= 32
 
-        test_client.cookies.set("bumbo_auth", "forged-token")
+        test_client.cookies.set("bambu_monitor_auth", "forged-token")
         assert test_client.get("/api/status").status_code == 401
 
     def test_tc_sec_19_unauthenticated_ui_redirects_to_login(self, test_client):

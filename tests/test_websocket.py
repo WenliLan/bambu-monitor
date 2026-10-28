@@ -8,7 +8,7 @@
 
 import pytest
 from unittest.mock import AsyncMock
-from bumbo_stats.api.websocket import ConnectionManager
+from bambu_monitor.api.websocket import ConnectionManager
 
 
 @pytest.mark.asyncio

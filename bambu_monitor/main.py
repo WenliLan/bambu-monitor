@@ -1,4 +1,4 @@
-"""bumbo_stats CLI 入口 - 登录认证与启动监控面板 Web 服务"""
+"""bambu_monitor CLI 入口 - 登录认证与启动监控面板 Web 服务"""
 
 import argparse
 import getpass
@@ -21,10 +21,10 @@ def _setup_console_logging(level: int = logging.INFO) -> None:
     """只配置控制台日志（login 等短命令使用）"""
     root = logging.getLogger()
     root.setLevel(level)
-    if any(getattr(h, "_bumbo_console", False) for h in root.handlers):
+    if any(getattr(h, "_bambu_console", False) for h in root.handlers):
         return
     handler = logging.StreamHandler(sys.stdout)
-    handler._bumbo_console = True  # type: ignore[attr-defined]
+    handler._bambu_console = True  # type: ignore[attr-defined]
     handler.setLevel(logging.INFO)
     handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
     root.addHandler(handler)
@@ -45,7 +45,7 @@ def _setup_logging(log_dir: str, debug: bool = False) -> Path:
 
     # 重复调用（如测试）时先移除旧的轮转 handler
     for handler in list(root.handlers):
-        if getattr(handler, "_bumbo_file", False):
+        if getattr(handler, "_bambu_file", False):
             root.removeHandler(handler)
             try:
                 handler.close()
@@ -59,7 +59,7 @@ def _setup_logging(log_dir: str, debug: bool = False) -> Path:
         backupCount=7,
         encoding="utf-8",
     )
-    file_handler._bumbo_file = True  # type: ignore[attr-defined]
+    file_handler._bambu_file = True  # type: ignore[attr-defined]
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT))
     root.addHandler(file_handler)
@@ -87,7 +87,7 @@ def _lan_ip() -> str | None:
 
 def _print_banner(version: str, config, host: str, port: int, log_path: Path, config_path: str):
     """启动横幅：打印可点击地址、日志与配置文件绝对路径（P3-5 / P1-4）"""
-    print(f"Bumbo Stats v{version} (云端模式)")
+    print(f"Bambu Monitor v{version} (云端模式)")
     print(f"   监控 {len(config.printers)} 台打印机")
     if host in ("0.0.0.0", "::", ""):
         print(f"   面板地址: http://127.0.0.1:{port}")
@@ -204,12 +204,12 @@ def _do_serve(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Bumbo Stats - 拓竹3D打印机多机云端监控面板",
+        description="Bambu Monitor - 拓竹3D打印机多机云端监控面板",
     )
     parser.add_argument(
         "--version",
         action="version",
-        version=f"bumbo_stats {__version__}",
+        version=f"bambu_monitor {__version__}",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="可用命令")
@@ -278,13 +278,13 @@ def main():
             args.debug = False
             # 重新解析以支持旧式参数
             legacy_parser = argparse.ArgumentParser(
-                description="Bumbo Stats - 拓竹3D打印机多机云端监控面板",
+                description="Bambu Monitor - 拓竹3D打印机多机云端监控面板",
             )
             legacy_parser.add_argument("--config", "-c", default="printers.yaml")
             legacy_parser.add_argument("--host", default=None)
             legacy_parser.add_argument("--port", "-p", type=int, default=None)
             legacy_parser.add_argument("--debug", action="store_true")
-            legacy_parser.add_argument("--version", action="version", version="bumbo_stats 0.3.0")
+            legacy_parser.add_argument("--version", action="version", version="bambu_monitor 0.3.0")
             args = legacy_parser.parse_args()
         _do_serve(args)
 

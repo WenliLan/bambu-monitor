@@ -13,7 +13,7 @@
 
 from datetime import date, datetime
 
-from bumbo_stats.models import (
+from bambu_monitor.models import (
     PrinterState,
     PrinterStatus,
     DailyUsage,

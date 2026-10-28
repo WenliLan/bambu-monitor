@@ -14,7 +14,7 @@ import pytest
 import yaml
 from pathlib import Path
 
-from bumbo_stats.config import (
+from bambu_monitor.config import (
     CloudConfig,
     PrinterConfig,
     AppSettings,
@@ -109,7 +109,7 @@ class TestModels:
     def test_tc_cfg_08_cloud_config_defaults(self):
         """TC-CFG-08: CloudConfig 默认值正确"""
         c = CloudConfig(username="test@test.com")
-        assert c.token_file == "~/.bumbo_token"
+        assert c.token_file == "~/.bambu_monitor_token"
         assert c.mqtt_broker == "cn"
 
 
