@@ -204,7 +204,7 @@ observer = start_watch(det, data_dir="data", blocking=True)
 
 ```python
 import sys
-sys.path.insert(0, r"h:\QoderWorkspace\bambu_AI\baselines\bambu_ai_deploy_dinoknn")
+sys.path.insert(0, r"<项目根目录>\bambu_ai_deploy_dinoknn")
 
 from detector import PrintDefectDetector
 

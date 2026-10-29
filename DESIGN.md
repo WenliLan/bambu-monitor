@@ -453,8 +453,8 @@ Windows 计划任务 (Task Scheduler)
 └── 日志: startup.log
 
 start_service.bat:
-  cd /d "H:\QoderWorkspace\bambu_monitor"
-  H:\anaconda\python.exe -m bambu_monitor.main serve --host 0.0.0.0 --debug
+  cd /d "<项目根目录>"
+  python -m bambu_monitor.main serve --host 0.0.0.0 --debug
 ```
 
 ---
@@ -704,7 +704,7 @@ python -m bambu_monitor.main login
 python -m bambu_monitor.main serve --host 0.0.0.0 --debug
 
 # Windows 开机自启动（管理员权限注册一次）
-schtasks /create /tn "BambuMonitor" /tr "H:\QoderWorkspace\bambu_monitor\start_service.bat" /sc onlogon /rl highest /f
+schtasks /create /tn "BambuMonitor" /tr "<项目根目录>\start_service.bat" /sc onlogon /rl highest /f
 ```
 
 ---
