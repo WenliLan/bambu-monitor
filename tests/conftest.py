@@ -33,13 +33,13 @@ cloud:
 printers:
   - name: "Printer-01"
     serial: "AC12309BH109"
-    ip: "192.168.31.5"
+    ip: "192.168.1.100"
     access_code: "12347890"
     location: "工作台A"
 
   - name: "Printer-02"
     serial: "AC12309BH110"
-    ip: "192.168.31.96"
+    ip: "192.168.1.101"
     access_code: "12347891"
     location: "工作台B"
 

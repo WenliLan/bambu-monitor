@@ -38,7 +38,7 @@ class TestLoadConfig:
         assert len(config.printers) == 2
         assert config.printers[0].name == "Printer-01"
         assert config.printers[0].serial == "AC12309BH109"
-        assert config.printers[0].ip == "192.168.31.5"
+        assert config.printers[0].ip == "192.168.1.100"
         assert config.printers[0].access_code == "12347890"
         assert config.printers[1].name == "Printer-02"
 
