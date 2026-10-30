@@ -6,7 +6,7 @@ AGENTS.md export-ignore
 .gitattributes export-ignore
 # 测试套件与子模块内部文档（使用者不需要，开发者 clone 仍可得）
 tests/ export-ignore
-bambu_stats/printer/AGENTS.md export-ignore
+bambu_monitor/printer/AGENTS.md export-ignore
 # 维护者脚本（自含扫描正则，打入包内会误报）
 build_release.ps1 export-ignore
 
