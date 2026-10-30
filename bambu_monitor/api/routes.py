@@ -1,6 +1,7 @@
 """REST API 路由"""
 
 import asyncio
+import logging
 import secrets
 import time
 
@@ -12,6 +13,8 @@ from .. import __version__
 from ..config import PrinterConfig
 
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 AUTH_COOKIE = "bambu_monitor_auth"
 SESSION_TTL = 7 * 24 * 3600  # 会话有效期（秒）
@@ -536,6 +539,113 @@ async def save_printers(request: Request, body: PrintersUpdate):
         await request.app.state._reload_printers(config.printers)
 
     return {"ok": True}
+
+
+class PrinterImportRequest(BaseModel):
+    serials: list[str] = Field(default_factory=list, description="要导入的设备序列号列表")
+    location: str = Field(default="", description="统一写入的存放位置，留空则不设置")
+
+
+@router.get("/api/settings/cloud/devices")
+async def cloud_devices(request: Request):
+    """列出拓竹云账号下的设备，供「从云端导入」勾选
+
+    返回每台设备的序列号、机器名、型号、在线状态、云端下发的摄像头接入码，
+    外加两项导入判定信息：
+
+    - ``already_added``：该序列号是否已在 ``printers.yaml`` 中
+    - ``discovered_ip``：局域网发现模块探测到的 IP（未启用或未发现时为空）
+
+    未登录云端时返回 ``ok=false`` 与 ``error=no_cloud``，不抛异常，便于前端提示。
+    """
+    if not require_auth(request):
+        raise HTTPException(status_code=401, detail="未登录")
+
+    client = getattr(request.app.state, "cloud_client", None)
+    if client is None:
+        return {"ok": False, "error": "no_cloud", "devices": [], "discovered": []}
+
+    lan = getattr(request.app.state, "lan_discovery", None)
+    try:
+        devices = await asyncio.to_thread(client.list_importable_devices)
+    except Exception as e:
+        return {"ok": False, "error": "cloud_unreachable", "detail": str(e),
+                "devices": [], "discovered": []}
+
+    existing = {p.serial for p in request.app.state.config.printers}
+    for d in devices:
+        # 不把接入码原文下发给浏览器：导入时服务端会自行按序列号重新取值
+        has_code = bool(d.pop("access_code", ""))
+        d["has_access_code"] = has_code
+        d["already_added"] = d["serial"] in existing
+        d["discovered_ip"] = lan.find_ip(dev_id=d["serial"], name=d["name"]) if lan else ""
+
+    return {
+        "ok": True,
+        "devices": devices,
+        "discovery_enabled": bool(lan and getattr(lan, "running", False)),
+        "discovered": lan.snapshot() if lan else [],
+    }
+
+
+@router.post("/api/settings/printers/import")
+async def import_printers(request: Request, body: PrinterImportRequest):
+    """把勾选中的云端设备加入监控
+
+    名称/序列号/摄像头接入码取自云端，IP 优先取局域网发现结果、取不到则留空待填。
+    已在配置中的序列号与云端不存在的序列号会被跳过并在 ``skipped`` 中说明原因。
+    有新增时写回 ``printers.yaml`` 的 ``printers`` 段并热加载，面板栏位与通知模板
+    随即自动扩展，无需重启。
+    """
+    if not require_auth(request):
+        raise HTTPException(status_code=401, detail="未登录")
+
+    client = getattr(request.app.state, "cloud_client", None)
+    if client is None:
+        raise HTTPException(status_code=400, detail="尚未登录拓竹云，无法获取设备列表")
+
+    config = request.app.state.config
+    try:
+        devices = await asyncio.to_thread(client.list_importable_devices)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"获取云端设备列表失败: {e}") from e
+
+    by_serial = {d["serial"]: d for d in devices}
+    lan = getattr(request.app.state, "lan_discovery", None)
+    existing = {p.serial for p in config.printers}
+
+    added: list[str] = []
+    skipped: list[dict] = []
+    for raw_serial in body.serials:
+        serial = (raw_serial or "").strip()
+        if not serial:
+            continue
+        if serial in existing:
+            skipped.append({"serial": serial, "reason": "already_added"})
+            continue
+        dev = by_serial.get(serial)
+        if dev is None:
+            skipped.append({"serial": serial, "reason": "not_in_cloud"})
+            continue
+        ip = lan.find_ip(dev_id=serial, name=dev["name"]) if lan else ""
+        config.printers.append(PrinterConfig(
+            name=dev["name"],
+            serial=serial,
+            ip=ip or None,
+            access_code=dev["access_code"] or None,
+            location=body.location or None,
+        ))
+        existing.add(serial)
+        added.append(serial)
+
+    if added:
+        config.save_yaml(sections=["printers"])
+        reload_fn = getattr(request.app.state, "_reload_printers", None)
+        if reload_fn is not None:
+            await reload_fn(config.printers)
+        logger.info("从云端导入 %d 台打印机: %s", len(added), ", ".join(added))
+
+    return {"ok": True, "added": added, "skipped": skipped, "total": len(config.printers)}
 
 
 @router.post("/api/settings/password")

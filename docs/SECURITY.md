@@ -14,6 +14,11 @@
 ## 凭据管理
 
 - `printers.yaml` 含打印机 `access_code`、机器人 `secret` 等**明文凭据**，已被 `.gitignore` 排除，请勿提交到任何仓库。
+- 「从云端导入」会自动把云端下发的 `dev_access_code` 写入 `printers.yaml`（与手工录入的落盘方式一致）。
+  候选列表接口 `GET /api/settings/cloud/devices` **只返回"接入码是否已获取"的布尔标记，不回显码值**；
+  导入时由服务端按序列号自行重新取值。
+- 局域网发现（`lan_discovery`）默认关闭：开启后会在本机监听一个 UDP 端口并向子网广播探测报文，
+  请仅在可信内网启用。
 - 多用户 / 容器环境推荐用环境变量替代明文落盘（优先级高于 YAML），清单见 [CONFIG.md](CONFIG.md#环境变量覆盖)。
 - Token / 密钥未做本地加密存储，多用户环境请限制文件读取权限。
 

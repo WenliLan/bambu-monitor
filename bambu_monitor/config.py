@@ -102,6 +102,34 @@ class AIGuardSettings(BaseModel):
     )
 
 
+class LanDiscoverySettings(BaseModel):
+    """局域网打印机发现配置（可选能力，默认关闭）
+
+    拓竹打印机在局域网内会通过 UDP 广播通告自身（含 IP 与机器名），
+    本模块被动监听并主动探测该通告，用于在"从云端导入设备"时自动补全
+    云端接口不返回的 IP 字段。
+
+    注意：云绑定状态下部分机型不做本地通告，此时发现结果为空属正常，
+    不影响云端导入（序列号/机器名/摄像头接入码均由云端直接给出）。
+    """
+    enabled: bool = Field(
+        default=False,
+        description="是否启用局域网发现（默认关闭；开启后会占用一个 UDP 端口并周期性广播探测）",
+    )
+    port: int = Field(default=1880, description="监听/探测的 UDP 端口（拓竹局域网通告端口）")
+    probe_interval: int = Field(
+        default=15, description="主动广播探测间隔（秒）；<=0 表示只被动监听不主动探测"
+    )
+    ttl: int = Field(
+        default=90,
+        description="发现结果的有效期（秒）；超过该时长未再收到通告即视为已离线并剔除",
+    )
+    multicast_dns: bool = Field(
+        default=True,
+        description="是否同时发起 mDNS(_bambulab._tcp.local) 查询作为补充发现手段",
+    )
+
+
 class UiSettings(BaseModel):
     """UI 层面设置"""
     admin_password_hash: str = Field(default="", description="管理员密码 SHA256 哈希")
@@ -115,6 +143,7 @@ class AppConfig(BaseModel):
     wecom: WeComSettings = Field(default_factory=WeComSettings)
     feishu: FeishuSettings = Field(default_factory=FeishuSettings)
     ai_guard: AIGuardSettings = Field(default_factory=AIGuardSettings)
+    lan_discovery: LanDiscoverySettings = Field(default_factory=LanDiscoverySettings)
     ui: UiSettings = Field(default_factory=UiSettings)
     # 配置文件来源路径（不写入 YAML）；save_yaml 默认写回此路径，
     # 避免测试等场景下误覆盖工作目录中的真实 printers.yaml
@@ -140,6 +169,7 @@ class AppConfig(BaseModel):
             "wecom": self.wecom.model_dump(),
             "feishu": self.feishu.model_dump(),
             "ai_guard": self.ai_guard.model_dump(),
+            "lan_discovery": self.lan_discovery.model_dump(),
             "ui": self.ui.model_dump(),
         }
 
@@ -254,9 +284,11 @@ def load_config(config_path: str = "printers.yaml") -> AppConfig:
     wecom = WeComSettings(**data.get("wecom", {}))
     feishu = FeishuSettings(**data.get("feishu", {}))
     ai_guard = AIGuardSettings(**data.get("ai_guard", {}))
+    lan_discovery = LanDiscoverySettings(**data.get("lan_discovery", {}))
     ui = UiSettings(**data.get("ui", {}))
 
     return _apply_env_overrides(AppConfig(
         cloud=cloud, printers=printers, settings=settings, wecom=wecom,
-        feishu=feishu, ai_guard=ai_guard, ui=ui, config_path=str(path),
+        feishu=feishu, ai_guard=ai_guard, lan_discovery=lan_discovery, ui=ui,
+        config_path=str(path),
     ))

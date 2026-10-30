@@ -10,7 +10,23 @@
 | `wecom` | 企业微信机器人 | `enabled`、`bot_id`、`secret`、`chatid`(留空自动发现)及各事件开关 |
 | `feishu` | 飞书机器人 | `app_id`、`app_secret`、`chatid`、事件开关、加急(`urgent_*`) |
 | `ai_guard` | AI 缺陷检测 | `enabled`、`interval`、`threshold`、`alert_frames`、`cooldown`、`alert_dir`、`deploy_dir` |
+| `lan_discovery` | 局域网发现（可选） | `enabled`(默认 `false`)、`port`(1880)、`probe_interval`、`ttl`、`multicast_dns` |
 | `ui` | 面板登录 | `admin_password_hash`(首次设密码时自动生成，无需手填) |
+
+## 从云端导入设备与局域网发现
+
+面板 **设置 → 打印机 → ☁️ 从云端导入** 会列出拓竹云账号下的全部设备，勾选后自动写入配置。
+云端 `user/bind` 接口直接提供 **序列号、机器名、型号、在线状态与摄像头接入码**
+（`dev_access_code`，即打印机管理页里那个 8 位接入码），因此这三项无需手工录入。
+
+云端**不返回局域网 IP**。IP 的来源按以下顺序：
+
+1. 若 `lan_discovery.enabled: true`，由本机 UDP 1880 监听/探测与 mDNS 查询得到的结果自动填入；
+2. 否则该字段留空，导入后在设置页补填一次即可（只有摄像头画面和 AI 检测需要 IP，
+   状态监控与通知不需要）。
+
+局域网发现的生效前提是**打印机与运行本程序的主机处于同一网段**。部分处于云绑定
+状态的机型不做本地通告，此时发现结果为空属正常，不影响导入本身。
 
 ## 路径解析规则
 

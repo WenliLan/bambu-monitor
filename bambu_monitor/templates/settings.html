@@ -109,7 +109,19 @@
         </div>
         <div class="btn-group">
             <button type="button" class="btn-secondary" id="btn-add-printer">➕ 添加打印机</button>
+            <button type="button" class="btn-secondary" id="btn-import-cloud">☁️ 从云端导入</button>
             <button type="button" class="btn-primary" id="btn-save-printers">💾 保存配置</button>
+        </div>
+
+        <!-- 云端导入候选：序列号/机器名/接入码来自云端，IP 由局域网发现补全 -->
+        <div class="settings-card" id="cloud-import" style="display:none;">
+            <div class="settings-card-title">☁️ 从拓竹云账号导入设备</div>
+            <div class="form-hint" id="cloud-import-hint"></div>
+            <div id="cloud-import-list"></div>
+            <div class="btn-group">
+                <button type="button" class="btn-primary btn-small" id="btn-import-confirm">✅ 导入勾选项</button>
+                <button type="button" class="btn-secondary btn-small" id="btn-import-cancel">关闭</button>
+            </div>
         </div>
     </div>
 
@@ -550,6 +562,92 @@ document.getElementById('btn-add-printer').addEventListener('click', () => {
 document.querySelectorAll('.btn-remove-printer').forEach(btn => {
     btn.addEventListener('click', () => btn.closest('.printer-card').remove());
 });
+
+// ☁️ 从云端导入：列出账号下设备，未添加项默认勾选；导入后热加载并刷新布局
+(function () {
+    const panel = document.getElementById('cloud-import');
+    const hint = document.getElementById('cloud-import-hint');
+    const list = document.getElementById('cloud-import-list');
+
+    function esc(s) {
+        return String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, function (c) {
+            return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c];
+        });
+    }
+
+    document.getElementById('btn-import-cloud').addEventListener('click', async function () {
+        panel.style.display = 'block';
+        list.innerHTML = '';
+        hint.textContent = '正在从云端获取设备列表…';
+        let data;
+        try {
+            const resp = await fetch('/api/settings/cloud/devices');
+            data = await resp.json();
+            if (!resp.ok) { hint.textContent = '获取失败: ' + (data.detail || resp.status); return; }
+        } catch (e) {
+            hint.textContent = '请求失败: ' + e;
+            return;
+        }
+        if (!data.ok) {
+            hint.textContent = data.error === 'no_cloud'
+                ? '尚未登录拓竹云：请先在「云端」标签页完成登录，再回来导入。'
+                : '云端不可达：' + (data.detail || data.error || '未知错误');
+            return;
+        }
+        const devs = data.devices || [];
+        if (!devs.length) { hint.textContent = '云端账号下没有设备。'; return; }
+        hint.innerHTML = '账号下共 ' + devs.length + ' 台设备。' + (data.discovery_enabled
+            ? '局域网发现已开启，当前已探测到 ' + (data.discovered || []).length + ' 台的 IP。'
+            : '局域网发现未开启（<code>lan_discovery.enabled=false</code>），导入后 IP 需手工补填；'
+              + '序列号、机器名与摄像头接入码仍由云端自动获取。');
+        devs.forEach(function (d) {
+            const row = document.createElement('label');
+            row.className = 'checkbox-label';
+            row.style.cssText = 'display:block;margin:8px 0;';
+            const bits = [d.online ? '🟢 在线' : '⚪ 离线'];
+            if (d.model) bits.push(esc(d.model));
+            bits.push(d.has_access_code ? '接入码 ✓' : '接入码 ✗');
+            bits.push(d.discovered_ip ? 'IP ' + esc(d.discovered_ip) : 'IP 待填');
+            const checked = d.already_added ? '' : (d.online ? ' checked' : '');
+            const disabled = d.already_added ? ' disabled' : '';
+            row.innerHTML = '<input type="checkbox" class="import-cb" value="' + esc(d.serial) + '"'
+                + checked + disabled + '> ' + esc(d.name)
+                + ' <span class="form-hint">(' + bits.join(' · ')
+                + (d.already_added ? ' · 已添加' : '') + ')</span>';
+            list.appendChild(row);
+        });
+    });
+
+    document.getElementById('btn-import-cancel').addEventListener('click', function () {
+        panel.style.display = 'none';
+    });
+
+    document.getElementById('btn-import-confirm').addEventListener('click', async function () {
+        const serials = Array.prototype.slice
+            .call(list.querySelectorAll('.import-cb:checked'))
+            .map(function (cb) { return cb.value; });
+        if (!serials.length) { showMsg('请先勾选要导入的设备', true); return; }
+        try {
+            const resp = await fetch('/api/settings/printers/import', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({serials: serials})
+            });
+            const r = await resp.json();
+            if (!resp.ok) { showMsg('导入失败: ' + (r.detail || resp.status), true); return; }
+            if (!r.added.length) {
+                showMsg('没有可导入的新设备' + (r.skipped.length ? '（已跳过 ' + r.skipped.length + ' 台）' : ''), true);
+                return;
+            }
+            showMsg('已导入 ' + r.added.length + ' 台'
+                + (r.skipped.length ? '，跳过 ' + r.skipped.length + ' 台' : '')
+                + '，面板布局自动调整中…', false);
+            setTimeout(function () { location.reload(); }, 900);
+        } catch (e) {
+            showMsg('导入请求失败: ' + e, true);
+        }
+    });
+})();
 
 document.getElementById('btn-save-printers').addEventListener('click', async () => {
     const cards = document.querySelectorAll('.printer-card');

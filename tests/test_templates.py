@@ -25,6 +25,8 @@
   TC-TPL-22: 连接中遮罩——未连接时 base.html 有 .connect-overlay，dashboard.css 虚化主内容，dashboard.js 切换 body.ws-connecting
   TC-TPL-23: dashboard.js 打印机状态变化时播放提示音（Web Audio），首次见到不鸣响
   TC-TPL-24: 非 running 状态角标放大居中覆盖监控画面（CSS .camera-state-center），running 回左上角
+  TC-TPL-25: 数据里出现但 DOM 里没有的 serial 会提示刷新（新增机器后不自愈的兜底）
+  TC-TPL-26: 设置页提供「从云端导入」入口，候选列表只展示接入码布尔标记且字段均转义
 """
 
 from pathlib import Path
@@ -909,3 +911,30 @@ class TestDashboardTemplate:
         )
         assert "location.reload()" in js, "提示必须提供刷新入口"
         assert ".unknown-printer-banner" in css, "提示条需要有可见样式"
+
+
+class TestCloudImportTemplate:
+    """云端导入入口的前端合约（与 test_cloud_import.py 的后端合约配对）"""
+
+    def test_tc_tpl_26_settings_has_cloud_import_entry(self):
+        """TC-TPL-26: 设置页提供云端导入入口，且候选列表只展示"接入码是否已获取"
+
+        导入 UI 若漏掉转义会把机器昵称当 HTML 渲染；若直接展示接入码原文，
+        则等于把摄像头密钥回显到页面上。两条都在此锁死。
+        """
+        html = (TEMPLATES_DIR / "settings.html").read_text(encoding="utf-8")
+
+        assert 'id="btn-import-cloud"' in html, "缺少「从云端导入」按钮"
+        assert 'id="cloud-import"' in html, "缺少候选面板容器"
+        assert "'/api/settings/cloud/devices'" in html, "未拉取云端候选列表"
+        assert "'/api/settings/printers/import'" in html, "未调用导入接口"
+        assert "already_added" in html, "已添加的设备需禁用勾选避免重复导入"
+
+        # 安全: 只允许出现布尔标记，不得渲染接入码原文
+        assert "has_access_code" in html, "应通过布尔标记展示接入码获取情况"
+        assert "d.access_code" not in html, "不得把云端接入码渲染到页面"
+
+        # 安全: 云端可控字段（机器名/IP）必须转义后插入 innerHTML
+        assert "function esc(" in html, "缺少 HTML 转义辅助函数"
+        assert "esc(d.name)" in html, "机器名必须转义"
+        assert "esc(d.discovered_ip)" in html, "发现的 IP 必须转义"

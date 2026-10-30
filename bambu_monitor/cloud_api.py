@@ -147,6 +147,39 @@ class BambuCloudClient:
             devices = []
         return [d for d in devices if isinstance(d, dict)]
 
+    def list_importable_devices(self) -> list[dict]:
+        """把 ``get_devices`` 的原始字段归一化为「导入」所需的稳定结构
+
+        云端 ``user/bind`` 实测返回（字段随机型/区域可能缺省）::
+
+            dev_id, name, dev_model_name, dev_product_name, dev_structure,
+            nozzle_diameter, online, print_job, print_status,
+            total_print_time, dev_access_code
+
+        其中 **``dev_access_code`` 就是摄像头接入码**，因此导入无需用户手填；
+        云端**不返回局域网 IP**，该字段由局域网发现补全或留空待填。
+
+        Returns:
+            每台设备一个 dict：``serial / name / model / product_name / online /
+            access_code / print_status``，缺少 ``dev_id`` 的条目会被跳过。
+        """
+        result: list[dict] = []
+        for d in self.get_devices():
+            serial = str(d.get("dev_id") or "").strip()
+            if not serial:
+                continue
+            name = str(d.get("name") or "").strip() or serial
+            result.append({
+                "serial": serial,
+                "name": name,
+                "model": str(d.get("dev_model_name") or "").strip(),
+                "product_name": str(d.get("dev_product_name") or "").strip(),
+                "online": bool(d.get("online")),
+                "access_code": str(d.get("dev_access_code") or "").strip(),
+                "print_status": str(d.get("print_status") or "").strip(),
+            })
+        return result
+
     def get_task(self, task_id: str) -> dict:
         """获取打印任务详情"""
         if not task_id:

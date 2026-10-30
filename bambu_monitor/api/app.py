@@ -16,6 +16,7 @@ from ..auth import TokenManager
 from ..cloud_api import BambuCloudClient, CloudAPIError, region_from_broker
 from ..config import AppConfig, PrinterConfig, load_config
 from ..database import Database
+from ..lan_discovery import LanDiscovery
 from ..printer.camera import CameraManager
 from ..printer.manager import PrinterManager
 from ..printer.monitor import PrintMonitor
@@ -547,12 +548,27 @@ async def lifespan(app: FastAPI):
         if _feishu_notifier is not None:
             _feishu_notifier.bind_ai_guard(_ai_guard)
 
+        # 8. 局域网发现（可选，默认关闭）：仅用于「从云端导入设备」时补全
+        #    云端接口不返回的 IP；绑定失败只降级，不影响服务启动
+        lan_disc = LanDiscovery(
+            enabled=config.lan_discovery.enabled,
+            port=config.lan_discovery.port,
+            ttl=config.lan_discovery.ttl,
+            probe_interval=config.lan_discovery.probe_interval,
+            multicast_dns=config.lan_discovery.multicast_dns,
+        )
+        await lan_disc.start()
+        app.state.lan_discovery = lan_disc
+
         logger.info("Bambu Monitor 已启动，监控 %d 台打印机", len(config.printers))
 
     yield
 
     # 清理（仅关闭内部启动的资源）
     if _started_internally:
+        lan_disc = getattr(app.state, "lan_discovery", None)
+        if lan_disc is not None:
+            await lan_disc.stop()
         for task in (_monitor_task, _camera_task, _reconnect_task, _cloud_retry_task):
             if task:
                 task.cancel()
