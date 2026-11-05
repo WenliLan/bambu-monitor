@@ -9,6 +9,11 @@
   <img alt="gpu" src="https://img.shields.io/badge/GPU-不需要-lightgrey">
 </p>
 
+![监控总览（演示数据）](docs/assets/dashboard-overview.jpg)
+
+> 上图由企微 / 飞书「总览」指令的同款渲染管线生成，与网页面板的四个区块一致；
+> 机器名、序列号、温度、进度与摄像头画面**均为虚构演示数据**，非真实设备。
+
 > [!TIP]
 > **不想自己折腾环境？把整个仓库交给你的 AI 编码助手。**
 > 在 Claude Code / Cursor / Codex 等 Agent 里打开本仓库，把下面这段话发给它，
