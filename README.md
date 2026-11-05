@@ -11,7 +11,7 @@
   <img alt="gpu" src="https://img.shields.io/badge/GPU-不需要-lightgrey">
 </p>
 
-![监控总览（演示数据）](docs/assets/dashboard-overview.jpg)
+<img src="docs/assets/dashboard-overview.jpg" alt="监控总览（演示数据）" width="620">
 
 > [!TIP]
 > **不想自己折腾环境？把整个仓库交给你的 AI 编码助手。**
