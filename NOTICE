@@ -1,0 +1,77 @@
+bambu-monitor — Third-Party Notices / 第三方声明
+================================================
+
+本项目整体以 MIT 许可证发布（见 `LICENSE`）。下列组件不属于本项目授权范围，
+按其各自的许可证提供，使用者需同时遵守。本文件按"是否随包分发"分组。
+
+
+一、随仓库 / 发布包分发的模型资产（含非商用限制，请务必阅读）
+------------------------------------------------------------
+
+1. `bambu_ai_deploy_dinoknn/gallery/*.npy`（异常与正常特征库，随 Git 仓库分发）
+
+   这些向量是由 **Meta 的 DINOv2 ViT-S/14 编码器**提取的 384 维 CLS 特征
+   （证据：`gallery/meta.json` 的 `"model": "dinov2_vits14"` 字段）。
+   DINOv2 模型权重以 **CC-BY-NC 4.0（署名—非商业性使用）** 发布，因此该特征库
+   以及依赖它的 AI 缺陷检测功能，应按**非商业使用**的范围对待。
+
+2. `dinov2_cache-v<版本>.zip`（GitHub Releases 附件，离线权重包，不在 Git 仓库内）
+
+   内含 `facebookresearch/dinov2` 源码树（**Apache-2.0**）与 Meta 发布的模型权重。
+   上游许可证文件已随包完整保留，未做修改：
+
+   - `LICENSE`（Apache-2.0，DINOv2 代码）
+   - `LICENSE_CELL_DINO_CODE`（CC-BY 4.0，Cell-DINO 代码）
+   - `LICENSE_CELL_DINO_MODELS`（CC-BY-NC 4.0，Cell-DINO 模型）
+   - `LICENSE_XRAY_DINO_MODEL`（FAIR Noncommercial Research License，X-Ray 模型）
+
+   骨干权重同样可由 `torch.hub` 在首次运行时自动下载，无需本附件。
+
+3. `bambu_monitor/models.py` 中的 HMS 错误码中文描述表（131 条）
+
+   整理自 **Bambu Lab 官方 Wiki**（`/hmscode/...` 错误码页面）。若权利人有异议，
+   请通过仓库 Issue 联系，我们会替换为自行撰写的描述文案。
+
+
+二、通过 pip 安装的第三方依赖（各自保留其许可证）
+------------------------------------------------
+
+核心运行时：fastapi (MIT)、starlette (BSD-3-Clause)、uvicorn (BSD-3-Clause)、
+pydantic (MIT)、jinja2 (BSD-3-Clause)、python-multipart (Apache-2.0)、
+aiosqlite (MIT)、requests (Apache-2.0)、paho-mqtt (EPL-2.0 OR BSD-3-Clause)、
+PyYAML (MIT)。
+
+`[notify]`：lark-oapi (MIT，飞书官方 SDK)、wecom-aibot-sdk (MIT，企业微信机器人 SDK)、
+websockets (BSD-3-Clause)、aiohttp (Apache-2.0 AND MIT)、playwright (Apache-2.0)。
+
+`[screenshot]`：playwright (Apache-2.0)，另需其下载的浏览器运行体。
+
+`[rtsp]`：imageio-ffmpeg (BSD-2-Clause)。注意它自带一个**静态构建的 ffmpeg**，
+ffmpeg 本体为 LGPL/GPL，且视编译选项可能涉及额外编解码器专利授权，请自行确认用途。
+
+`[ai]`：torch (Apache-2.0 / BSD / MIT / Zlib 等多项组合)、torchvision (BSD)、
+numpy (BSD-3-Clause 等组合)、Pillow (MIT-CMU)、watchdog (Apache-2.0)。
+可选运行时 faiss（惰性导入，未列入依赖清单，Apache-2.0）。
+
+`[dev]`：pytest (MIT)、httpx (BSD-3-Clause)、ruff (MIT)。
+
+
+三、前端与界面资源
+------------------
+
+- Chart.js 4.4.7（MIT）：经 jsDelivr CDN 引入，见 `bambu_monitor/templates/base.html`。
+  该图依赖外网可达；纯离线部署时产能折线图不会渲染。
+- 界面图标为 Unicode emoji，未引入任何图标字体或图标库。
+- `static/js/sortable.js` 为本项目自行实现，**不是** SortableJS 库的副本。
+
+
+四、协议与实现来源（致谢与免责）
+--------------------------------
+
+- 拓竹云端 REST / MQTT 报文格式、本机摄像头取流（TCP 6000 JPEG、RTSPS 322）与
+  局域网发现方式，参考了公开资料与社区实现，包括 **bambu-lab-cloud-api**、
+  **Bambuddy**、**Bambu Studio**。本项目的对应模块均为独立重写，未包含上述项目源码。
+- 本项目**不是**拓竹科技（Bambu Lab）的官方产品，也未获得其背书、授权或赞助。
+  Bambu Lab、Bambu Studio、Bambu Handy 等为其各自权利人的商标。
+- 使用上述非官方接口可能受拓竹服务条款约束，是否合规由使用者自行评估；
+  本项目不提供任何"接口长期可用"的承诺，云端接口变更可能导致功能失效。

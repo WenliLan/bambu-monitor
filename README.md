@@ -101,4 +101,9 @@ ruff check bambu_monitor tests
 
 ## License
 
-[MIT](LICENSE) · DINOv2 骨干网权重为 Meta 的 **CC-BY-NC 4.0**（非商用），故不随仓库分发，详见 [docs/AI.md](docs/AI.md)。
+[MIT](LICENSE) · 第三方组件、模型资产的非商用限制与协议数据来源见 [NOTICE](NOTICE)。
+
+两点需要使用者知道：AI 缺陷检测依赖的 DINOv2 权重为 Meta 的 **CC-BY-NC 4.0**（非商用），
+故不随仓库分发（详见 [docs/AI.md](docs/AI.md)），而随仓库分发的 `gallery/` 特征库由该模型
+提取，同样建议按非商用范围使用；此外本项目不是拓竹官方产品，云端与摄像头接口基于公开资料
+与社区实现自行重写，是否符合拓竹服务条款由使用者自行评估。
