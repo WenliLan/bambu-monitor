@@ -688,6 +688,7 @@ async def get_printer(request: Request, serial: str):
 async def get_camera_frame(request: Request, serial: str):
     """获取摄像头最新帧 (JPEG)"""
     camera = request.app.state.camera_manager
+    camera.note_viewer()  # 面板取图即"有人观看"，唤醒暂停的抓帧循环
     frame = await camera.get_frame(serial)
     if not frame:
         return Response(status_code=404, content="Camera frame not available")
@@ -741,7 +742,9 @@ async def ai_detect(request: Request, serial: str):
     if not ai_guard or not ai_guard.is_available:
         raise HTTPException(status_code=503, detail="AI detector not available")
 
-    # 获取摄像头帧
+    # 获取摄像头帧（抓帧循环可能处于暂停：先唤醒并稍等，避免读到暂停前的旧缓存）
+    camera.note_viewer()
+    await asyncio.sleep(2.0)
     frame = await camera.get_frame(serial)
     if not frame:
         raise HTTPException(status_code=503, detail="Camera frame not available")

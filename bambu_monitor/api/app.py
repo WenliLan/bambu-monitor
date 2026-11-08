@@ -446,6 +446,8 @@ async def lifespan(app: FastAPI):
 
         # 3. 摄像头（本地协议，与云端无关）
         camera = CameraManager(config.printers)
+        # 无人观看时暂停抓帧：以 WS 连接数作为观看信号
+        camera.set_viewers_check(lambda: len(_ws_manager._connections) > 0)
         app.state.camera_manager = camera
         app.state._camera = camera
 
@@ -667,6 +669,13 @@ def create_app(config: AppConfig | None = None, config_path: str = "printers.yam
             await websocket.close(code=1008)
             return
         await _ws_manager.connect(websocket)
+        # 新观看者上线：唤醒暂停的摄像头抓帧 + 强制下一次批量广播（否则要等状态变化才有快照）
+        cam = getattr(app.state, "_camera", None)
+        if cam is not None:
+            cam.note_viewer()
+        mon = getattr(app.state, "_monitor", None)
+        if mon is not None:
+            mon.invalidate_batch()
         try:
             while True:
                 await websocket.receive_text()

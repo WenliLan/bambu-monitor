@@ -278,6 +278,11 @@ class AIGuardLoop:
                 sys.path.insert(0, deploy_dir)
             from detector import PrintDefectDetector
 
+            # torch 默认按物理核数开满推理线程；本机仅 4 核（i5-6300HQ），
+            # 不限制会周期性抢占 Bambu Studio 切片/远程桌面的 CPU
+            import torch
+            torch.set_num_threads(2)
+
             threshold = self._cfg.threshold if self._cfg.threshold > 0 else None
             return PrintDefectDetector(
                 threshold=threshold,
@@ -378,6 +383,11 @@ class AIGuardLoop:
         recent_frames: list[bytes] = []
         recent_probs: list[float] = []
         triggered_alert = None
+
+        # 摄像头循环可能因无人观看而暂停：先唤醒并稍等，确保取到的是当下
+        # 画面而不是暂停前的旧缓存（6000 仅允许一个客户端，不自己抢连）
+        self._camera.note_viewer()
+        await asyncio.sleep(min(2.0, float(self._camera_interval)))
 
         for i in range(self._cfg.frames_per_check):
             if not self._running:

@@ -499,7 +499,8 @@ class FeishuNotifier:
                     self._ws_thread is not None
                     and self._ws_thread.is_alive()
                 )
-                logger.info(
+                # 固定周期的心跳式自检，非异常时降为 debug（异常路径仍走 warning/error）
+                logger.debug(
                     "[健康检查] WSClient 连接对象=%s, 后台线程存活=%s, "
                     "回调累计=%d, app_id=%s..., chatid=%s",
                     "✅ 已连接" if conn is not None else "❌ 未连接",
@@ -984,6 +985,9 @@ class FeishuNotifier:
 
     async def _get_camera_frames(self, serial: str) -> list:
         """获取多张摄像头帧"""
+        # 通知截图属于"有人要画面"：唤醒可能已暂停的抓帧循环
+        if self._camera is not None:
+            self._camera.note_viewer()
         frames: list = []
         for i in range(FRAMES_PER_NOTIFICATION):
             if i > 0:
