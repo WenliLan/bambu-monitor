@@ -175,7 +175,9 @@ class PrinterManager:
                     await asyncio.to_thread(mqtt.request_full_status)
                     status = self._status_cache.get(serial)
                     if status:
-                        logger.info(
+                        # 每 30s × 每台都会打一条，是最大的日志量来源；降为 debug
+                        # （面板自检请看 /healthz 与 WS 状态帧，不依赖此行）
+                        logger.debug(
                             "状态同步 [%s]: 层 %d/%d 进度 %d%% 状态 %s",
                             serial, status.current_layer, status.total_layers,
                             status.progress, status.state.value

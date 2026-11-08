@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Union
@@ -100,7 +101,8 @@ class PrintDefectDetector:
         self.alert_dir = alert_dir
         self.heatmap_dir = os.path.join(alert_dir, "all")
         self._consecutive = 0
-        self._history: list[DetectionResult] = []
+        # maxlen 防止长期运行（仅报警才 reset）时无界增长；检测只回看最近若干帧
+        self._history: deque[DetectionResult] = deque(maxlen=100)
         self._pending_frames: list[Image.Image] = []
 
         if self.save_alerts:
@@ -200,7 +202,7 @@ class PrintDefectDetector:
         self._history.clear()
 
     @property
-    def history(self) -> list[DetectionResult]:
+    def history(self) -> deque[DetectionResult]:
         return self._history
 
     def stats(self) -> dict:

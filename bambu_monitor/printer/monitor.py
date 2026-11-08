@@ -1,6 +1,7 @@
 """后台监控任务 - 处理 MQTT 事件驱动的状态更新和定期批量广播"""
 
 import asyncio
+import json
 import logging
 from datetime import date
 from typing import Callable, Awaitable
@@ -63,6 +64,8 @@ class PrintMonitor:
         # 记录每次进入 PAUSE 时的层数，用于区分"中途暂停"(layer>0) 和
         # "切片已上传、等待开始"(layer=0)：后者在 PAUSE->RUNNING 时其实是一个新任务
         self._pause_layer: dict[str, int] = {}
+        # 上次批量广播的内容指纹：状态未变化时跳过整包广播（每 5s×全机的 WS 流量大头）
+        self._last_batch_fp: str = ""
         self._running = False
         self._last_snapshot_date: date | None = date.today()
 
@@ -207,13 +210,32 @@ class PrintMonitor:
         await self.broadcast(payload)
 
     async def _broadcast_all(self):
-        """广播所有打印机的当前状态快照"""
+        """广播所有打印机的当前状态快照（内容未变化则跳过）"""
         statuses = self.manager.get_all_statuses()
+        data = {s: st.model_dump(mode="json") for s, st in statuses.items()}
+        # last_updated 每次都变，剔除后才能判断"真实状态是否改变"
+        fp = json.dumps(
+            {s: {k: v for k, v in d.items() if k != "last_updated"} for s, d in data.items()},
+            sort_keys=True,
+        )
+        if fp == self._last_batch_fp:
+            return
         payload = {
             "type": "status_batch",
-            "data": {s: st.model_dump(mode="json") for s, st in statuses.items()},
+            "data": data,
         }
+        # 只有广播成功才记指纹：失败时（连接抖动/回调异常）下一周期必须重试，
+        # 否则这份快照会永久丢失，客户端要等状态真的变化才能恢复
         await self.broadcast(payload)
+        self._last_batch_fp = fp
+
+    def invalidate_batch(self):
+        """清空指纹，强制下一次批量广播发出
+
+        新客户端连上 WS 时调用：否则它会收到"没有 status_batch"的空档，
+        只能等状态真的变化才看到第一帧快照。
+        """
+        self._last_batch_fp = ""
 
     def _check_progress_events(self, serial: str, status: PrinterStatus):
         """检查打印进度事件（第3层 / 50%进度 / 100% 完成），触发企业微信通知
@@ -244,7 +266,9 @@ class PrintMonitor:
                 )
             if error_events:
                 gcode = status.gcode_file or ""
-                logger.info(
+                # 每次 MQTT 上报都会命中，实际去重在通知层（feishu 快照指纹）做；
+                # 这里降为 debug，否则同一错误每秒刷一条 INFO
+                logger.debug(
                     "触发HMS错误通知: %s errors=%s file=%s",
                     serial,
                     [(hex(e.code), e.severity, e.message) for e in error_events],
