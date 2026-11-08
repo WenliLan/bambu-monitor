@@ -88,11 +88,17 @@ class CameraManager:
         self._running = True
         logger.info("摄像头捕获循环启动，间隔: %ss（无人观看时自动暂停）", interval)
         idle_logged = False
+        # 暂停/恢复是高频翻转：AI 检测周期、通知截图都会 note_viewer() 把循环唤醒，
+        # 30s 宽限期过后又回到暂停，稳定时每几分钟就打一对。首次用 INFO 把机制讲清楚，
+        # 之后一律 DEBUG；恢复事件信息量更低，直接 DEBUG。
+        pause_noticed = False
         while self._running:
             if not self._viewer_active():
                 if not idle_logged:
-                    logger.info("无面板观看/取帧请求，摄像头抓帧暂停（每台每 %ss 一次 TLS 握手）",
-                                interval)
+                    log = logger.debug if pause_noticed else logger.info
+                    log("无面板观看/取帧请求，摄像头抓帧暂停（每台每 %ss 一次 TLS 握手）",
+                        interval)
+                    pause_noticed = True
                     idle_logged = True
                 self._wake.clear()
                 try:
@@ -101,7 +107,7 @@ class CameraManager:
                     pass
                 continue
             if idle_logged:
-                logger.info("检测到观看者，摄像头抓帧恢复")
+                logger.debug("检测到观看者，摄像头抓帧恢复")
                 idle_logged = False
             tasks = []
             for serial in self._configs:
