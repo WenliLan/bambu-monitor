@@ -404,7 +404,10 @@ class FeishuNotifier:
             self._ws_client = LARKClient(
                 app_id=self._cfg.app_id,
                 app_secret=self._cfg.app_secret,
-                log_level=LARKLogLevel.INFO,
+                # SDK 在 Client.__init__ 末尾执行 logger.setLevel(log_level.value)，
+                # 会覆盖 main.py 里对 "Lark"  logger 的级别设置；传 INFO 时它会把
+                # 含 access_key 的 ws-frontier 完整 URL 打进 logs/app.log。
+                log_level=LARKLogLevel.WARNING,
                 event_handler=handler,
                 auto_reconnect=True,
             )
