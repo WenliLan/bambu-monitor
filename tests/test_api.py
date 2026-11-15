@@ -281,3 +281,148 @@ class TestSettingsRoutes:
         })
         assert resp.status_code == 200
         reload_mock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# AI 异常检测接口（图库 + 阈值）
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def ai_client():
+    """已登录且注入了 mock AI guard 的客户端"""
+    app = _create_test_app()
+    app.state.config.ui.admin_password_hash = app.state.config.hash_password("admin")
+    guard = MagicMock()
+    guard.gallery_status.return_value = {
+        "available": True, "gallery": {"n_normal": 131, "n_anomaly": 134},
+    }
+    guard.ingest_gallery = AsyncMock(return_value={"state": "running", "total": 2})
+    guard.stage_upload.return_value = "data/normal/a.jpg"
+    guard.threshold = 0.7
+    guard.set_threshold.return_value = 0.7
+    guard.open_alert_folder.return_value = "D:\\proj\\data\\alerts_review"
+    app.state._ai_guard = guard
+    c = TestClient(app)
+    assert c.post("/api/auth/login", json={"password": "admin"}).status_code == 200
+    return c, guard
+
+
+def _upload(c, name="a.jpg", payload=b"\xff\xd8", label="normal"):
+    return c.post("/api/ai/gallery/upload", data={"label": label},
+                  files=[("files", (name, payload, "image/jpeg"))])
+
+
+class TestAIGalleryRoutes:
+    def test_tc_api_20_gallery_requires_login(self, client):
+        """TC-API-20: 三个图库接口未登录一律 401"""
+        assert client.get("/api/ai/gallery").status_code == 401
+        assert client.post("/api/ai/gallery/ingest").status_code == 401
+        assert _upload(client).status_code == 401
+
+    def test_tc_api_21_gallery_without_guard_503(self, auth_client):
+        """TC-API-21: AI 未启用时返回 503 而不是 500"""
+        assert auth_client.get("/api/ai/gallery").status_code == 503
+
+    def test_tc_api_22_gallery_status(self, ai_client):
+        """TC-API-22: 读取图库现状"""
+        c, guard = ai_client
+        resp = c.get("/api/ai/gallery")
+        assert resp.status_code == 200
+        assert resp.json()["gallery"]["n_normal"] == 131
+        guard.gallery_status.assert_called_once()
+
+    def test_tc_api_23_ingest(self, ai_client):
+        """TC-API-23: 启动增量入库"""
+        c, guard = ai_client
+        resp = c.post("/api/ai/gallery/ingest")
+        assert resp.status_code == 200
+        assert resp.json()["state"] == "running"
+        guard.ingest_gallery.assert_awaited_once()
+
+    def test_tc_api_24_ingest_unavailable_503(self, ai_client):
+        """TC-API-24: 检测器不可用时入库返回 503"""
+        c, guard = ai_client
+        guard.ingest_gallery.side_effect = RuntimeError("AI 检测器不可用")
+        resp = c.post("/api/ai/gallery/ingest")
+        assert resp.status_code == 503
+        assert "不可用" in resp.json()["detail"]
+
+    def test_tc_api_25_upload(self, ai_client):
+        """TC-API-25: 上传素材转交 guard 落盘"""
+        c, guard = ai_client
+        resp = _upload(c)
+        assert resp.status_code == 200
+        assert resp.json()["saved"] == ["data/normal/a.jpg"]
+        guard.stage_upload.assert_called_once_with("normal", "a.jpg", b"\xff\xd8")
+
+    def test_tc_api_26_upload_rejects_bad_file(self, ai_client):
+        """TC-API-26: 全部文件非法时返回 400 并带上原因"""
+        c, guard = ai_client
+        guard.stage_upload.side_effect = ValueError("不支持的图片格式: .txt")
+        resp = _upload(c, name="a.txt")
+        assert resp.status_code == 400
+        assert ".txt" in resp.json()["detail"]
+
+
+class TestAIThresholdRoute:
+    def test_tc_api_27_threshold_requires_login(self, client):
+        """TC-API-27: 未登录改阈值一律 401"""
+        assert client.post("/api/ai/threshold", json={"threshold": 0.8}).status_code == 401
+
+    def test_tc_api_28_threshold_set(self, ai_client):
+        """TC-API-28: 改阈值转交 guard.set_threshold 并回传新旧值"""
+        c, guard = ai_client
+        guard.set_threshold.return_value = 0.7
+        guard.threshold = 0.8
+        resp = c.post("/api/ai/threshold", json={"threshold": 0.8})
+        assert resp.status_code == 200
+        assert resp.json() == {"threshold": 0.8, "previous": 0.7}
+        guard.set_threshold.assert_called_once_with(0.8)
+
+    def test_tc_api_29_threshold_range(self, ai_client):
+        """TC-API-29: 越界阈值被拒；0 是配置里的"未设置"哨兵，必须挡住"""
+        c, guard = ai_client
+        for bad in (0.0, -0.1, 0.04, 0.96, 1.0, 2.5):
+            resp = c.post("/api/ai/threshold", json={"threshold": bad})
+            assert resp.status_code == 422, f"{bad} -> {resp.status_code}"
+        guard.set_threshold.assert_not_called()
+
+    def test_tc_api_30_threshold_unavailable_503(self, ai_client):
+        """TC-API-30: 检测器不可用时 set_threshold 返回 -1，接口给 503"""
+        c, guard = ai_client
+        guard.set_threshold.return_value = -1.0
+        resp = c.post("/api/ai/threshold", json={"threshold": 0.8})
+        assert resp.status_code == 503
+        assert "不可用" in resp.json()["detail"]
+
+    def test_tc_api_31_threshold_without_guard_503(self, auth_client):
+        """TC-API-31: AI 未启用时返回 503 而不是 500"""
+        assert auth_client.post("/api/ai/threshold",
+                                json={"threshold": 0.8}).status_code == 503
+
+
+class TestAIOpenFolderRoute:
+    def test_tc_api_32_open_folder_requires_login(self, client):
+        """TC-API-32: 未登录不能触发服务端开文件夹"""
+        assert client.post("/api/ai/open-folder").status_code == 401
+
+    def test_tc_api_33_open_folder(self, ai_client):
+        """TC-API-33: 返回服务端解析出的绝对路径，不接受前端传参"""
+        c, guard = ai_client
+        resp = c.post("/api/ai/open-folder", json={"path": "C:\\Windows"})
+        assert resp.status_code == 200
+        assert resp.json() == {"path": "D:\\proj\\data\\alerts_review"}
+        guard.open_alert_folder.assert_called_once_with()
+
+    def test_tc_api_34_open_folder_failure_503(self, ai_client):
+        """TC-API-34: 平台不支持或系统调用失败都给 503，不是 500"""
+        c, guard = ai_client
+        for exc in (RuntimeError("仅支持 Windows"), OSError("no association")):
+            guard.open_alert_folder.side_effect = exc
+            resp = c.post("/api/ai/open-folder")
+            assert resp.status_code == 503
+            assert "打开文件夹失败" in resp.json()["detail"]
+
+    def test_tc_api_35_open_folder_without_guard_503(self, auth_client):
+        """TC-API-35: AI 未启用时返回 503 而不是 500"""
+        assert auth_client.post("/api/ai/open-folder").status_code == 503

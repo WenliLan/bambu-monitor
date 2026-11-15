@@ -416,19 +416,19 @@ class TestRecordPrintEndNoDailyUsage:
         """TC-NV-16: 两次结束后 daily_usage 无记录，今日产能累加正确"""
         serial = "AC12309BH109"
         await _insert_running(db, serial, "a.gcode", _today_at(8, 0))
-        with _patch_dt():
-            await db.record_print_end(serial, "completed")
+        await db.record_print_end(
+            serial, "completed", end_time=datetime.fromisoformat(_today_at(10, 0)))
         await _insert_running(db, serial, "b.gcode", _today_at(12, 0))
         with _patch_dt():
             await db.record_print_end(serial, "completed")
         # daily_usage 无记录
         row = await _read_daily_usage(db, serial, TODAY_STR)
         assert row is None
-        # 今日产能从 sessions 实时计算: (14:30-08:00=23400) + (14:30-12:00=9000) = 32400s
+        # 今日产能从 sessions 实时计算: (10:00-08:00=7200) + (14:30-12:00=9000) = 16200s
         with _patch_dt():
             items = await db.get_today_usage_all(printer_names)
         p = next(i for i in items if i.printer_serial == serial)
-        assert p.total_print_seconds == 32400
+        assert p.total_print_seconds == 16200
 
 
 # ===== TC-NV-17~20: 快照数值精确验证 =====
@@ -656,3 +656,53 @@ class TestEdgeCaseExact:
             assert m.points[-1].date == TODAY
             for i in range(1, 30):
                 assert m.points[i].date == m.points[i - 1].date + timedelta(days=1)
+
+
+# ===== TC-NV-29~31: 重叠区间求并集 =====
+
+@pytest.mark.asyncio
+class TestOverlapUnion:
+    """重叠 session 只算一次：重启重复补录、断线重连都会产出重叠区间"""
+
+    async def test_tc_nv_29_completed_overlaps_running(self, db, printer_names):
+        """TC-NV-29: completed 与 running 重叠时按并集算，不超过墙上时间"""
+        serial = "AC12309BH109"
+        # 重启时被误结算到重启时刻的旧任务 08:00→14:00
+        await _insert_completed(
+            db, serial, "job.gcode", _today_at(8, 0), _today_at(14, 0), 21600)
+        # 补录倒填出的 running 10:00→now(14:30)
+        await _insert_running(db, serial, "job", _today_at(10, 0))
+        with _patch_dt():
+            items = await db.get_today_usage_all(printer_names)
+        p = next(i for i in items if i.printer_serial == serial)
+        # 并集 08:00→14:30 = 23400s，而非 21600+16200=37800s
+        assert p.total_print_seconds == 23400
+        assert p.utilization_percent == 27.1
+
+    async def test_tc_nv_30_duplicated_sessions_not_over_100(self, db, printer_names):
+        """TC-NV-30: 完全重复的 session 不会把单日产能推过 100%"""
+        serial = "AC12309BH109"
+        for _ in range(4):
+            await _insert_completed(
+                db, serial, "job.gcode",
+                _yesterday_at(20, 0), _today_at(14, 0), 64800,
+            )
+        with _patch_dt():
+            items = await db.get_today_usage_all(printer_names)
+        p = next(i for i in items if i.printer_serial == serial)
+        # 今天部分 00:00→14:00 = 50400s，四份重叠只算一次（旧算法为 201600s / 233%）
+        assert p.total_print_seconds == 50400
+        assert p.utilization_percent == 58.3
+
+    async def test_tc_nv_31_snapshot_overlaps_counted_once(self, db):
+        """TC-NV-31: 快照同样对重叠区间求并集"""
+        serial = "S001"
+        await _insert_completed(
+            db, serial, "a.gcode", _yesterday_at(10, 0), _yesterday_at(14, 0), 14400)
+        await _insert_completed(
+            db, serial, "b.gcode", _yesterday_at(12, 0), _yesterday_at(16, 0), 14400)
+        await db.snapshot_past_day(YESTERDAY)
+        row = await _read_daily_usage(db, serial, YESTERDAY_STR)
+        # 并集 10:00→16:00 = 21600s，而非 28800s
+        assert row["total_print_seconds"] == 21600
+        assert row["session_count"] == 2

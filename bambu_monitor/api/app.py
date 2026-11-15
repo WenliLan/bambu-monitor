@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -85,6 +86,7 @@ async def _backfill_from_cloud(client, config: AppConfig, db: Database,
 
     device_map = {d.get("dev_id", ""): d for d in devices}
     task_names: dict[str, str] = {}
+    task_starts: dict[str, datetime] = {}
     print_states: dict[str, str] = {}
     for device in devices:
         dev_id = device.get("dev_id", "")
@@ -98,6 +100,15 @@ async def _backfill_from_cloud(client, config: AppConfig, db: Database,
                 name = task.get("name", "") if isinstance(task, dict) else ""
                 if name:
                     task_names[dev_id] = name
+                # status=4 表示进行中，此时 update_time 才是真正开始打印的时刻
+                # （create_time 只是任务下发时刻）。云端返回的是账号本地时间。
+                if isinstance(task, dict) and str(task.get("status", "")) == "4":
+                    raw = str(task.get("update_time") or "").strip()
+                    if raw:
+                        try:
+                            task_starts[dev_id] = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+                        except ValueError:
+                            logger.debug("任务开始时刻解析失败 %s: %r", dev_id, raw)
             except Exception as e:
                 logger.debug("获取任务名称失败 %s: %s", dev_id, e)
 
@@ -127,8 +138,11 @@ async def _backfill_from_cloud(client, config: AppConfig, db: Database,
         monitor._last_states[serial] = status.state
         monitor._last_gcode[serial] = status.gcode_file
         if status.state == PrinterState.RUNNING:
-            await db.record_print_start(serial, status.gcode_file, settle_time=last_heartbeat)
-            logger.info("启动补录: %s 正在打印 %s", serial, status.gcode_file)
+            cloud_start = task_starts.get(serial)
+            await db.record_print_start(serial, status.gcode_file,
+                                        settle_time=last_heartbeat, start_time=cloud_start)
+            logger.info("启动补录: %s 正在打印 %s (云端开始时刻 %s)", serial, status.gcode_file,
+                        cloud_start.isoformat() if cloud_start else "未知")
 
 
 async def _attach_cloud(app: FastAPI, config: AppConfig, manager: PrinterManager,

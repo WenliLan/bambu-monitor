@@ -5,7 +5,7 @@ import logging
 import secrets
 import time
 
-from fastapi import APIRouter, Request, HTTPException, Response
+from fastapi import APIRouter, Request, HTTPException, Response, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -762,3 +762,79 @@ async def ai_detect(request: Request, serial: str):
     result["image"] = base64.b64encode(frame).decode()
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# AI 异常检测 API（设置页「AI 异常检测」标签）
+# ---------------------------------------------------------------------------
+
+def _require_ai_guard(request: Request):
+    if not require_auth(request):
+        raise HTTPException(status_code=401, detail="未登录")
+    guard = getattr(request.app.state, "_ai_guard", None)
+    if guard is None:
+        raise HTTPException(status_code=503, detail="AI 异常检测未启用")
+    return guard
+
+
+class ThresholdUpdate(BaseModel):
+    # 0 在 ai_config 里是"未显式配置"的哨兵值，放开会让重启后回落到 meta.json
+    threshold: float = Field(ge=0.05, le=0.95, description="异常判定阈值")
+
+
+@router.post("/api/ai/threshold")
+async def ai_set_threshold(request: Request, body: ThresholdUpdate):
+    """修改判定阈值：立即生效并写回 printers.yaml，无需重启"""
+    guard = _require_ai_guard(request)
+    old = guard.set_threshold(body.threshold)
+    if old < 0:
+        raise HTTPException(status_code=503, detail="AI 检测器不可用，无法修改阈值")
+    return {"threshold": guard.threshold, "previous": old}
+
+
+@router.get("/api/ai/gallery")
+async def ai_gallery_status(request: Request):
+    """图库现状、待入库统计与当前入库任务进度"""
+    return _require_ai_guard(request).gallery_status()
+
+
+@router.post("/api/ai/gallery/ingest")
+async def ai_gallery_ingest(request: Request):
+    """增量入库：扫描 data/normal 与 data/anomaly，跳过已入库的，完成后热生效"""
+    guard = _require_ai_guard(request)
+    try:
+        return await guard.ingest_gallery()
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@router.post("/api/ai/gallery/upload")
+async def ai_gallery_upload(request: Request, label: str = Form(...),
+                            files: list[UploadFile] = File(...)):
+    """上传图片素材到 data/<label>/（label = normal / anomaly / uncertain）"""
+    guard = _require_ai_guard(request)
+    if len(files) > 20:
+        raise HTTPException(status_code=400, detail="单次最多上传 20 张，请分批")
+    saved, errors = [], []
+    for f in files:
+        try:
+            payload = await f.read()
+            saved.append(guard.stage_upload(label, f.filename or "", payload))
+        except ValueError as e:
+            errors.append({"name": f.filename or "", "error": str(e)})
+        finally:
+            await f.close()
+    if not saved:
+        raise HTTPException(status_code=400,
+                            detail=errors[0]["error"] if errors else "没有收到文件")
+    return {"saved": saved, "errors": errors}
+
+
+@router.post("/api/ai/open-folder")
+async def ai_open_alert_folder(request: Request):
+    """在面板所在电脑上打开报警图片目录（路径取自服务端配置，不接受前端传参）"""
+    guard = _require_ai_guard(request)
+    try:
+        return {"path": guard.open_alert_folder()}
+    except (RuntimeError, OSError) as e:
+        raise HTTPException(status_code=503, detail=f"打开文件夹失败: {e}")

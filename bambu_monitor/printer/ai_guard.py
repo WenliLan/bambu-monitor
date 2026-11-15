@@ -7,7 +7,8 @@
     - 每帧推入 PrintDefectDetector.push()
     - 连续 alert_frames 帧异常 → 触发报警
   报警触发后：
-    1. 报警图片自动保存到 alert_dir（detector 内置机制）
+    1. 报警各帧平铺保存到 alert_dir（由本模块 _save_alarm_frames 负责，
+       detector 的 save_alerts 已关闭，避免重复落盘）
     2. WebSocket 广播 → 网页弹出通知
     3. WeComNotifier 入队 → 企业微信机器人推送
   每台打印机有独立冷却期（默认 30 分钟），防止重复轰炸。
@@ -19,6 +20,7 @@
 import asyncio
 import logging
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,6 +30,12 @@ from ..config import AIGuardSettings
 from ..models import PrinterState
 
 logger = logging.getLogger(__name__)
+
+_IMG_EXT = (".jpg", ".jpeg", ".png", ".bmp", ".webp")
+_LABEL_DIRS = ("normal", "anomaly", "uncertain")
+_INGEST_BATCH = 16
+_INGEST_ABORTED = "入库已中止：面板正在停止"
+_MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 
 class AIGuardLoop:
@@ -65,6 +73,12 @@ class AIGuardLoop:
         self._running = False
         self._detector = None  # 延迟初始化（可能在子线程加载模型）
         self._init_error: Optional[str] = None
+        self._deploy_dir: Optional[Path] = None
+        self._ingest_job: Optional[dict] = None
+        self._ingest_task: Optional[asyncio.Task] = None
+        self._ingest_lock = asyncio.Lock()
+        # 入库跑在子线程里，cancel() 杀不掉它，只能靠这个标志让它自己退出
+        self._ingest_stop = threading.Event()
 
         # 可观测性（P3-7）：让 /healthz 与日志能证明检测器真的在跑
         self._last_check_at: Optional[str] = None
@@ -155,8 +169,11 @@ class AIGuardLoop:
     def stop(self):
         """停止后台任务"""
         self._running = False
+        self._ingest_stop.set()
         if self._task:
             self._task.cancel()
+        if self._ingest_task and not self._ingest_task.done():
+            self._ingest_task.cancel()
         logger.info("AI 异常报警已停止")
 
     @property
@@ -215,6 +232,220 @@ class AIGuardLoop:
             )
         return old
 
+    # ------------------------------------------------------------------
+    # 图库增量入库（设置页「AI 图库」标签）
+    # ------------------------------------------------------------------
+
+    def _ensure_deploy_dir(self) -> Path:
+        if self._deploy_dir is None:
+            found = self._resolve_deploy_dir()
+            if found is None:
+                raise RuntimeError("未找到 AI 检测器目录（需包含 detector.py）")
+            self._deploy_dir = found
+        return self._deploy_dir
+
+    @staticmethod
+    def _scan_images(root: Path) -> list[Path]:
+        if not root.is_dir():
+            return []
+        return sorted(p for p in root.rglob("*")
+                      if p.is_file() and p.suffix.lower() in _IMG_EXT)
+
+    def _gallery_key(self, raw: str) -> str:
+        """归一化图库里记录的路径；出厂样本是相对部署目录的字符串"""
+        return os.path.normcase(os.path.abspath(
+            os.path.join(str(self._ensure_deploy_dir()), raw)))
+
+    def _pending_images(self) -> tuple[list[tuple[str, Path]], int]:
+        """返回 (待入库列表, 已入库而跳过的张数)"""
+        deploy = self._ensure_deploy_dir()
+        known: set[str] = set()
+        gallery = getattr(self._detector, "gallery", None)
+        if gallery is not None:
+            known = {self._gallery_key(p)
+                     for p in list(gallery.anomaly_paths) + list(gallery.normal_paths)}
+        pending, skipped = [], 0
+        for label in ("normal", "anomaly"):
+            for p in self._scan_images(deploy / "data" / label):
+                if self._gallery_key(str(p)) in known:
+                    skipped += 1
+                else:
+                    pending.append((label, p))
+        return pending, skipped
+
+    def gallery_status(self) -> dict:
+        """图库现状 + 待入库统计 + 当前入库任务（供设置页展示）"""
+        info: dict = {
+            "enabled": self._cfg.enabled,
+            "available": self.is_available,
+            "init_error": self._init_error or "",
+            "threshold": self.threshold,
+            "deploy_dir": "", "data_dir": "",
+            "gallery": {}, "staged": {}, "job": self._ingest_job,
+        }
+        try:
+            deploy = self._ensure_deploy_dir()
+        except RuntimeError as e:
+            info["init_error"] = info["init_error"] or str(e)
+            return info
+        info["deploy_dir"] = str(deploy)
+        info["data_dir"] = str(deploy / "data")
+
+        if self.is_available:
+            try:
+                info["gallery"] = self._detector.stats()
+            except Exception as e:
+                logger.warning("读取图库统计失败: %s", e)
+
+        try:
+            pending, skipped = self._pending_images()
+        except Exception as e:
+            logger.warning("扫描待入库图片失败: %s", e)
+            pending, skipped = [], 0
+        new_by_label = {"normal": 0, "anomaly": 0}
+        for label, _ in pending:
+            new_by_label[label] += 1
+        staged = {}
+        for label in _LABEL_DIRS:
+            total = len(self._scan_images(deploy / "data" / label))
+            staged[label] = {"total": total, "new": new_by_label.get(label, 0)}
+        staged["skipped"] = skipped
+        info["staged"] = staged
+        return info
+
+    def stage_upload(self, label: str, filename: str, payload: bytes) -> str:
+        """把上传的图片落到 data/<label>/，返回相对部署目录的路径
+
+        文件名只取 basename 并重建 stem+后缀，确保不会写出 data/ 之外。
+        """
+        if label not in _LABEL_DIRS:
+            raise ValueError(f"未知分类: {label}")
+        if not payload:
+            raise ValueError("文件内容为空")
+        if len(payload) > _MAX_UPLOAD_BYTES:
+            raise ValueError(f"单张图片不得超过 {_MAX_UPLOAD_BYTES // 1024 // 1024}MB")
+        name = os.path.basename((filename or "").replace("\\", "/")).strip()
+        suffix = Path(name).suffix.lower()
+        if suffix not in _IMG_EXT:
+            raise ValueError(f"不支持的图片格式: {suffix or '(无扩展名)'}")
+        stem = "".join(c for c in Path(name).stem if c not in '<>:"|?*' and ord(c) >= 32)
+        stem = stem[:80].strip() or "image"
+
+        deploy = self._ensure_deploy_dir()
+        target_dir = (deploy / "data" / label).resolve()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / f"{stem}{suffix}"
+        n = 1
+        while target.exists():
+            target = target_dir / f"{stem}_{n}{suffix}"
+            n += 1
+        if not target.resolve().is_relative_to(target_dir):
+            raise ValueError("非法文件名")
+        target.write_bytes(payload)
+        rel = target.relative_to(deploy.resolve()).as_posix()
+        logger.info("图库素材已上传: %s (%d 字节)", rel, len(payload))
+        return rel
+
+    def open_alert_folder(self) -> str:
+        """在面板所在电脑上打开报警图片目录，返回其绝对路径"""
+        # 浏览器禁止网页指定文件选择框的起始目录，只能由服务端开资源管理器代劳
+        if not hasattr(os, "startfile"):
+            raise RuntimeError("打开文件夹仅支持 Windows（面板需运行在本机）")
+        folder = Path(self._cfg.alert_dir).resolve()
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(str(folder))
+        logger.info("已打开报警图片目录: %s", folder)
+        return str(folder)
+
+    async def ingest_gallery(self) -> dict:
+        """启动增量入库任务（立即返回，进度由 gallery_status 轮询）"""
+        if not self.is_available:
+            raise RuntimeError(self._init_error or "AI 检测器不可用，无法提特征")
+        # 扫描是 await，不加锁的话两次并发点击都会通过 running 检查，起两个 worker
+        async with self._ingest_lock:
+            if self._ingest_job and self._ingest_job["state"] == "running":
+                return self._ingest_job
+            # 先扫描再建 job：total 必须在首个响应里就是真实值，否则前端进度条从 0/0 起跳
+            pending, skipped = await asyncio.to_thread(self._pending_images)
+            job = {
+                "state": "running", "total": len(pending), "done": 0,
+                "added": 0, "added_normal": 0, "added_anomaly": 0,
+                "skipped": skipped, "failed": 0, "error": "",
+                "started_at": datetime.now().isoformat(timespec="seconds"),
+                "finished_at": "",
+            }
+            self._ingest_job = job
+            self._ingest_stop.clear()
+            self._ingest_task = asyncio.create_task(self._ingest_run(job, pending))
+            return job
+
+    async def _ingest_run(self, job: dict, pending: list):
+        try:
+            await asyncio.to_thread(self._ingest_worker, job, pending)
+            job["state"] = "done"
+        except asyncio.CancelledError:
+            job["state"] = "error"
+            job["error"] = _INGEST_ABORTED
+            raise
+        except Exception as e:
+            job["state"] = "error"
+            job["error"] = str(e)
+            logger.error("图库增量入库失败: %s", e)
+        finally:
+            job["finished_at"] = datetime.now().isoformat(timespec="seconds")
+
+    def _ingest_worker(self, job: dict, pending: list):
+        """在子线程提特征并落盘；成功后热替换运行中的图库"""
+        from extractor import extract_batch
+        from knn import FeatureGallery
+
+        if not pending:
+            return
+        deploy = self._ensure_deploy_dir()
+
+        # 在磁盘副本上追加，失败时运行中的图库不受影响
+        gal = FeatureGallery(str(deploy / "gallery"), k=self._detector.k,
+                             decision_threshold=self._cfg.threshold or 0.7)
+        for i in range(0, len(pending), _INGEST_BATCH):
+            if self._ingest_stop.is_set():
+                raise RuntimeError(_INGEST_ABORTED)
+            chunk = pending[i:i + _INGEST_BATCH]
+            feats = None
+            try:
+                feats = extract_batch([str(p) for _, p in chunk],
+                                      batch_size=_INGEST_BATCH)
+            except Exception as e:
+                logger.warning("批量提特征失败，改逐张重试: %s", e)
+            for j, (label, path) in enumerate(chunk):
+                try:
+                    feat = (feats[j] if feats is not None
+                            else extract_batch([str(path)], batch_size=1)[0])
+                    gal.add(feat, label, path.relative_to(deploy).as_posix(),
+                            autosave=False)
+                    job["added"] += 1
+                    job[f"added_{label}"] += 1
+                except Exception as e:
+                    job["failed"] += 1
+                    logger.warning("入库失败 %s: %s", path, e)
+                job["done"] += 1
+
+        if self._ingest_stop.is_set():
+            raise RuntimeError(_INGEST_ABORTED)
+        if not job["added"]:
+            return
+        gal.save()
+        # detect() 每次只读一次 self.gallery，原子赋值即可让推理线程立刻用上
+        # 新图库，不必重启面板
+        if self._cfg.threshold > 0:
+            gal.update_threshold(self._cfg.threshold)
+        self._detector.gallery = gal
+        self._detector.k = gal.k
+        logger.info(
+            "图库增量入库完成并已热生效: normal=%d anomaly=%d（新增 %d，跳过重复 %d，失败 %d）",
+            len(gal.normal_paths), len(gal.anomaly_paths),
+            job["added"], job["skipped"], job["failed"],
+        )
+
     async def detect_single(self, frame: bytes, serial: str) -> dict:
         """手动单帧推理（供 API 调用，不触发报警）
 
@@ -272,6 +503,7 @@ class AIGuardLoop:
                     "ai_guard.deploy_dir 或环境变量 BAMBU_AI_DEPLOY_DIR 中指定路径"
                 )
             deploy_dir = str(deploy)
+            self._deploy_dir = deploy
             # deploy 目录自带 extractor/knn/dino_knn，无需再挂源码仓库的
             # bambu_AI/baselines/scripts（发布包中不存在，P3 清理）
             if deploy_dir not in sys.path:
@@ -372,8 +604,8 @@ class AIGuardLoop:
           - 每帧间隔 camera_interval 秒从摄像头缓存取帧
           - 循环中只推理+缓存，不保存（避免重复）
           - 检测结束后统一保存:
-              * 报警 → 所有帧保存到 alerts_review 单一子目录
-              * 正常 → 每帧保存到 normal_review（独立子目录）
+              * 报警 → 所有帧平铺保存到 alerts_review
+              * 正常 → 每帧平铺保存到 normal_review
         """
         printer_name = status.name or serial[-6:]
         # 本轮所有帧（用于循环结束后统一保存）
@@ -439,7 +671,7 @@ class AIGuardLoop:
         )
 
         if triggered_alert:
-            # 报警：所有帧一起保存到 alerts_review 单一子目录
+            # 报警：所有帧一起平铺保存到 alerts_review
             await asyncio.to_thread(
                 self._save_alarm_frames, all_frames, triggered_alert.probability, serial,
             )
@@ -454,12 +686,9 @@ class AIGuardLoop:
     def _save_frame(self, frame: bytes, probability: float, serial: str):
         """保存单帧推理图片（手动/定时非报警场景）
 
-        每次保存创建子文件夹:
-            data/normal_review/{serial}_{时间}_P<概率}/{serial}_{时间}_P<概率>_原图.jpg
-            data/normal_review/{serial}_{时间}_P<概率>/{serial}_{时间}_P<概率>_热力图.jpg
-
-        异常 -> data/alerts_review/
-        正常 -> data/normal_review/
+        平铺在分类目录下，不再为每次推理建子文件夹:
+            异常 -> data/alerts_review/{serial后6位}_{时间}_P{概率}_原图.jpg
+            正常 -> data/normal_review/{serial后6位}_{时间}_P{概率}_原图.jpg
         """
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         suffix = serial[-6:]
@@ -469,37 +698,32 @@ class AIGuardLoop:
             base_dir = Path("./data/normal_review")
 
         folder_name = f"{suffix}_{ts}_P{probability:.2f}"
-        event_dir = base_dir / folder_name
-        event_dir.mkdir(parents=True, exist_ok=True)
+        base_dir.mkdir(parents=True, exist_ok=True)
 
-        # 保存原图
-        img_name = f"{folder_name}_原图.jpg"
-        with open(event_dir / img_name, "wb") as f:
+        img_path = base_dir / f"{folder_name}_原图.jpg"
+        with open(img_path, "wb") as f:
             f.write(frame)
 
-        logger.debug("推理图片已保存: %s", event_dir)
+        logger.debug("推理图片已保存: %s", img_path)
 
     def _save_alarm_frames(self, frames: list[bytes], probability: float, serial: str):
-        """保存报警事件的多帧原图
+        """保存报警事件的多帧原图（平铺，不建子文件夹）
 
-        结构:
-            data/alerts_review/{serial}_{时间}_P<概率>/
-                {serial}_{时间}_P<概率>_原图_1.jpg
-                {serial}_{时间}_P<概率>_原图_2.jpg
-                ...
+        data/alerts_review/{serial后6位}_{时间}_P{概率}_原图_1.jpg … _N.jpg
+        同一次报警的帧共用前缀，按文件名排序即可聚在一起。
         """
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         suffix = serial[-6:]
-        folder_name = f"{suffix}_{ts}_P{probability:.2f}"
-        event_dir = Path(self._cfg.alert_dir) / folder_name
-        event_dir.mkdir(parents=True, exist_ok=True)
+        base_name = f"{suffix}_{ts}_P{probability:.2f}"
+        alert_dir = Path(self._cfg.alert_dir)
+        alert_dir.mkdir(parents=True, exist_ok=True)
 
         for i, frame_bytes in enumerate(frames, start=1):
-            base_name = f"{folder_name}_原图_{i}.jpg"
-            with open(event_dir / base_name, "wb") as f:
+            with open(alert_dir / f"{base_name}_原图_{i}.jpg", "wb") as f:
                 f.write(frame_bytes)
 
-        logger.warning("报警事件已保存: %s (共 %d 帧)", event_dir, len(frames))
+        logger.warning("报警事件已保存 %d 帧到 %s (前缀 %s)",
+                       len(frames), alert_dir, base_name)
 
     async def _trigger_alarm(self, serial: str, status, alert, alarm_frames: list[bytes] = None):
         """触发报警：WebSocket 广播 + 企业微信通知

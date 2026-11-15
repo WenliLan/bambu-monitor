@@ -105,12 +105,25 @@ class FeatureGallery:
         with open(p, encoding="utf-8") as f:
             return json.load(f)
 
+    def _atomic_write(self, fn: str, write) -> None:
+        """先写 .tmp 再 os.replace: 直接覆写时中途崩溃会留下半截文件, 整个图库就读不回来了"""
+        target = os.path.join(self.dir, fn)
+        tmp = target + ".tmp"
+        try:
+            with open(tmp, "wb") as f:
+                write(f)
+            os.replace(tmp, target)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
     def _save_npy(self, fn: str, arr: np.ndarray) -> None:
-        np.save(os.path.join(self.dir, fn), arr)
+        # 传文件句柄而非路径: np.save 对不以 .npy 结尾的路径会自行补后缀
+        self._atomic_write(fn, lambda f: np.save(f, arr))
 
     def _save_json(self, fn: str, obj) -> None:
-        with open(os.path.join(self.dir, fn), "w", encoding="utf-8") as f:
-            json.dump(obj, f, ensure_ascii=False, indent=0)
+        self._atomic_write(fn, lambda f: f.write(
+            json.dumps(obj, ensure_ascii=False, indent=0).encode("utf-8")))
 
     def _save_meta(self) -> None:
         meta = {
@@ -122,8 +135,8 @@ class FeatureGallery:
             "embed_dim": EMBED_DIM,
             "model": "dinov2_vits14 (DINOv2 ViT-S/14, 384-d CLS token)",
         }
-        with open(os.path.join(self.dir, "meta.json"), "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        self._atomic_write("meta.json", lambda f: f.write(
+            json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8")))
 
     def save(self) -> None:
         """全量保存到磁盘."""
@@ -135,8 +148,13 @@ class FeatureGallery:
 
     # ============ 增删改 ============
 
-    def add(self, feat: np.ndarray, label: str, path: str) -> None:
-        """追加单条样本. label ∈ {"anomaly", "normal"}."""
+    def add(self, feat: np.ndarray, label: str, path: str,
+            autosave: bool = True) -> None:
+        """追加单条样本. label ∈ {"anomaly", "normal"}.
+
+        autosave=False 只改内存, 由调用方在批量结束后 save() 一次:
+        每张都 save 是全量重写, N 张的磁盘写入量是 O(N²).
+        """
         assert label in ("anomaly", "normal"), f"label 必须是 anomaly/normal, 收到 {label}"
         assert feat.shape == (EMBED_DIM,), f"feat 形状应为 ({EMBED_DIM},)"
         feat = feat.astype("float32").reshape(1, -1)
@@ -148,7 +166,8 @@ class FeatureGallery:
             self.normal_feats = np.vstack([self.normal_feats, feat]) \
                 if len(self.normal_feats) else feat
             self.normal_paths.append(path)
-        self.save()
+        if autosave:
+            self.save()
 
     def remove(self, path: str) -> bool:
         """按 path 删除一条. 返回是否找到."""

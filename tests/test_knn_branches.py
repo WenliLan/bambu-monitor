@@ -12,6 +12,7 @@ faiss 分支仅在装了 faiss 时执行。
 import json
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -127,3 +128,75 @@ def test_both_branches_agree(gallery):
     knn.HAVE_FAISS = True
     p_fa = gallery.predict(query).probability
     assert p_np == pytest.approx(p_fa, abs=1e-6)
+
+
+# ============ 落盘: 原子写 + 批量入库只写一次 ============
+
+def _feat(seed=3):
+    return _unit(np.random.default_rng(seed).normal(size=D)).astype("float32")
+
+
+def test_save_leaves_no_temp_files(tmp_path):
+    _make_gallery(tmp_path, n_anomaly=2, n_normal=2)
+    g = FeatureGallery(str(tmp_path), k=5)
+    g.add(_feat(), "normal", "normal/new.jpg")
+
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "anomaly_features.npy", "anomaly_paths.json", "meta.json",
+        "normal_features.npy", "normal_paths.json",
+    ]
+    back = FeatureGallery(str(tmp_path))
+    assert back.normal_paths == ["normal/0.jpg", "normal/1.jpg", "normal/new.jpg"]
+    assert len(back.normal_feats) == 3
+
+
+def test_torn_write_keeps_the_old_file(tmp_path):
+    """写一半就失败时, 磁盘上仍是完整的旧文件, 且不留 .tmp"""
+    _make_gallery(tmp_path, n_anomaly=2, n_normal=2)
+    g = FeatureGallery(str(tmp_path), k=5)
+    before = (tmp_path / "anomaly_features.npy").read_bytes()
+
+    def torn(f, arr):
+        f.write(b"half a npy")
+        raise OSError("disk full")
+
+    with patch.object(knn.np, "save", torn):
+        with pytest.raises(OSError, match="disk full"):
+            g.add(_feat(), "anomaly", "anomaly/new.jpg")
+
+    assert (tmp_path / "anomaly_features.npy").read_bytes() == before
+    assert not list(tmp_path.glob("*.tmp"))
+    assert len(FeatureGallery(str(tmp_path)).anomaly_paths) == 2
+
+
+def test_add_autosave_false_defers_write(tmp_path):
+    _make_gallery(tmp_path, n_anomaly=1, n_normal=1)
+    g = FeatureGallery(str(tmp_path), k=5)
+    feat = _feat()
+    g.add(feat, "normal", "normal/new.jpg", autosave=False)
+    assert json.loads(
+        (tmp_path / "normal_paths.json").read_text(encoding="utf-8")) == ["normal/0.jpg"]
+
+    g.save()
+    back = FeatureGallery(str(tmp_path))
+    assert back.normal_paths == ["normal/0.jpg", "normal/new.jpg"]
+    np.testing.assert_allclose(back.normal_feats[-1], feat, atol=1e-6)
+
+
+def test_bulk_add_then_single_save(tmp_path):
+    _make_gallery(tmp_path, n_anomaly=1, n_normal=1)
+    g = FeatureGallery(str(tmp_path), k=5)
+    calls = []
+    real_save = g.save
+
+    def counting_save():
+        calls.append(1)
+        real_save()
+
+    g.save = counting_save
+    for i in range(20):
+        g.add(_feat(seed=i), "normal", f"normal/bulk{i}.jpg", autosave=False)
+    assert calls == []
+    g.save()
+    assert len(calls) == 1
+    assert len(FeatureGallery(str(tmp_path)).normal_paths) == 21

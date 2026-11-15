@@ -279,10 +279,13 @@ class TestSessions:
     async def test_tc_db_20_today_running_only_latest(self, db, printer_names):
         """TC-DB-20: today usage running session 只取最新一个"""
         serial = "AC12309BH109"
+        now = datetime.now()
         today_midnight = datetime.combine(date.today(), datetime.min.time())
-        # 确保 start_time 在今天内，避免跨午夜截断
-        old_time = (today_midnight + timedelta(hours=2)).isoformat()
-        new_time = (today_midnight + timedelta(hours=6)).isoformat()
+        # 两个时间点都必须落在 [今天0点, now] 内：写死 02:00/06:00 会在凌晨
+        # 变成未来时间，被产能计算正确地截断成 0，导致断言假失败
+        elapsed = (now - today_midnight).total_seconds()
+        old_time = (today_midnight + timedelta(seconds=elapsed * 0.25)).isoformat()
+        new_time = (today_midnight + timedelta(seconds=elapsed * 0.75)).isoformat()
         async with aiosqlite.connect(db.db_path) as conn:
             await conn.execute("""
                 INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
@@ -582,3 +585,100 @@ class TestHeartbeat:
         assert row["status"] == "running"
         start_time = datetime.fromisoformat(row["start_time"])
         assert start_time >= before - timedelta(seconds=1)
+
+    async def test_tc_db_33_start_idempotent_same_gcode(self, db):
+        """TC-DB-33: 同一任务重复上报幂等 — 云端任务名无扩展名也算同一任务"""
+        serial = "S001"
+        await db.upsert_printer(serial, "Printer", "1.2.3.4")
+        await db.record_print_start(serial, "job.3mf")
+        await db.record_print_start(
+            serial, "job", settle_time=datetime.now() - timedelta(hours=5))
+
+        sessions = await db.get_sessions(serial)
+        assert len(sessions) == 1
+        assert sessions[0].status == "running"
+        assert sessions[0].end_time is None
+
+    async def test_tc_db_34_startup_double_backfill_no_overlap(self, db, printer_names):
+        """TC-DB-34: 启动时 MQTT 首次状态与云端补录先后调用，不产生重叠区间"""
+        serial = "AC12309BH109"
+        await db.upsert_printer(serial, "Printer-01", "1.2.3.4")
+        old_start = datetime.now() - timedelta(hours=22)
+        heartbeat = datetime.now() - timedelta(hours=20)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
+                VALUES (?, ?, ?, 'running')
+            """, (serial, "job.3mf", old_start.isoformat()))
+            await conn.commit()
+
+        # MQTT 首次状态路径（不带 settle_time），随后云端补录路径（带心跳）
+        await db.record_print_start(serial, "job.3mf")
+        await db.record_print_start(serial, "job", settle_time=heartbeat)
+
+        sessions = await db.get_sessions(serial)
+        # 任务从未结束，原 running 记录保持不动
+        assert len(sessions) == 1
+        assert sessions[0].status == "running"
+        assert sessions[0].start_time == old_start
+
+        items = await db.get_today_usage_all(printer_names)
+        p1 = next(i for i in items if i.printer_serial == serial)
+        assert p1.utilization_percent <= 100.0
+
+    async def test_tc_db_35_cloud_start_time_overrides_heartbeat(self, db):
+        """TC-DB-35: 云端给出真实开始时刻时，新任务从该时刻起算而非心跳倒填"""
+        serial = "S001"
+        await db.upsert_printer(serial, "Printer", "1.2.3.4")
+        old_start = datetime.now() - timedelta(hours=30)
+        heartbeat = datetime.now() - timedelta(hours=28)
+        cloud_start = datetime.now() - timedelta(hours=3)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
+                VALUES (?, ?, ?, 'running')
+            """, (serial, "old_job.gcode", old_start.isoformat()))
+            await conn.commit()
+
+        await db.record_print_start(serial, "new_job.gcode",
+                                    settle_time=heartbeat, start_time=cloud_start)
+
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM print_sessions WHERE printer_serial=? ORDER BY id", (serial,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        # 遗留任务仍结算到心跳（停机期无观测证据）
+        assert rows[0]["end_time"] == heartbeat.isoformat()
+        assert rows[0]["duration_seconds"] == 2 * 3600
+        # 新任务用云端真实开始时刻，绝不倒填到 28 小时前
+        assert rows[1]["status"] == "running"
+        assert rows[1]["start_time"] == cloud_start.isoformat()
+
+    async def test_tc_db_36_cloud_start_before_heartbeat_no_overlap(self, db):
+        """TC-DB-36: 云端开始时刻早于心跳时，遗留任务结算到该时刻，两条不重叠"""
+        serial = "S001"
+        await db.upsert_printer(serial, "Printer", "1.2.3.4")
+        old_start = datetime.now() - timedelta(hours=30)
+        heartbeat = datetime.now() - timedelta(hours=2)
+        cloud_start = datetime.now() - timedelta(hours=20)
+        async with aiosqlite.connect(db.db_path) as conn:
+            await conn.execute("""
+                INSERT INTO print_sessions (printer_serial, gcode_file, start_time, status)
+                VALUES (?, ?, ?, 'running')
+            """, (serial, "old_job.gcode", old_start.isoformat()))
+            await conn.commit()
+
+        await db.record_print_start(serial, "new_job.gcode",
+                                    settle_time=heartbeat, start_time=cloud_start)
+
+        async with aiosqlite.connect(db.db_path) as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM print_sessions WHERE printer_serial=? ORDER BY id", (serial,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+        assert rows[0]["end_time"] == cloud_start.isoformat()
+        assert rows[1]["start_time"] == cloud_start.isoformat()
+        assert rows[0]["duration_seconds"] == 10 * 3600
