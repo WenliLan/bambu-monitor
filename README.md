@@ -7,7 +7,7 @@
 <p align="left">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-green">
   <img alt="python" src="https://img.shields.io/badge/python-≥3.10-blue">
-  <img alt="release" src="https://img.shields.io/badge/release-v0.6.0-orange">
+  <img alt="release" src="https://img.shields.io/badge/release-v0.6.1-orange">
   <img alt="gpu" src="https://img.shields.io/badge/GPU-不需要-lightgrey">
 </p>
 
