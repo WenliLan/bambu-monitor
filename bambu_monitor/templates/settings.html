@@ -12,6 +12,7 @@
         <button class="tab-btn" data-tab="printers">🖨️ 打印机</button>
         <button class="tab-btn" data-tab="wecom">💬 企业微信</button>
         <button class="tab-btn" data-tab="feishu">🔵 飞书</button>
+        <button class="tab-btn" data-tab="ai">🧠 AI 异常检测</button>
         <button class="tab-btn" data-tab="password">🔐 密码</button>
     </div>
 
@@ -274,6 +275,114 @@
                 <button type="button" class="btn-secondary" id="btn-test-feishu">🧪 发送测试</button>
             </div>
         </form>
+    </div>
+
+    <!-- AI 异常检测 Tab -->
+    <div class="tab-panel" id="panel-ai">
+        <div class="settings-form">
+            <div class="settings-card">
+                <div class="settings-card-title">🧠 当前图库</div>
+                <div class="gallery-stats">
+                    <div class="gallery-stat"><span class="gallery-stat-num" id="gs-normal">—</span><span class="gallery-stat-label">正常样本</span></div>
+                    <div class="gallery-stat"><span class="gallery-stat-num" id="gs-anomaly">—</span><span class="gallery-stat-label">异常样本</span></div>
+                    <div class="gallery-stat"><span class="gallery-stat-num" id="gs-k">—</span><span class="gallery-stat-label">比对张数</span></div>
+                    <div class="gallery-stat"><span class="gallery-stat-num" id="gs-threshold">—</span><span class="gallery-stat-label">判定阈值</span></div>
+                </div>
+                <p class="form-hint" id="gallery-meta">正在读取…</p>
+                <p class="form-hint gallery-error" id="gallery-error" style="display:none"></p>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">🎚️ 判定阈值</div>
+                <p class="form-hint">AI 给每张画面打一个 0~1 的异常分，<b>分数达到阈值就报警</b>。调低更容易报警（漏报少、误报多），调高更不容易报警（误报少、但可能漏掉轻微故障）。</p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>阈值（0.05 ~ 0.95，出厂默认 0.70）</label>
+                        <input type="number" id="threshold-input" min="0.05" max="0.95" step="0.01" value="0.70">
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button type="button" class="btn-primary" id="btn-threshold">💾 保存阈值</button>
+                </div>
+                <p class="form-hint" id="threshold-result"></p>
+                <p class="form-hint">保存后立即生效并写入配置，重启不会丢。误报太多就往上调一点（每次 0.05），老漏报就往下调。</p>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">📥 第一步：放入素材</div>
+                <p class="form-hint">把照片按你的判断上传到对应分类。上传只是存进待入库目录，<b>还要点第二步的「增量入库」才会真正进入图库</b>。</p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>分类</label>
+                        <select id="upload-label">
+                            <option value="normal">✅ 正常（被误报的画面放这里）</option>
+                            <option value="anomaly">🚨 异常（拉丝 / 塌陷 / 堵头 / 炒面）</option>
+                            <option value="uncertain">❓ 待定（先存着，不会自动入库）</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>选择图片（可多选，单次 ≤ 20 张，单张 ≤ 20MB）</label>
+                        <input type="file" id="upload-files" accept=".jpg,.jpeg,.png,.bmp,.webp" multiple>
+                    </div>
+                </div>
+                <div class="btn-group">
+                    <button type="button" class="btn-secondary" id="btn-open-folder">📂 打开报警图片文件夹</button>
+                    <button type="button" class="btn-secondary" id="btn-upload">⬆️ 上传素材</button>
+                </div>
+                <p class="form-hint" id="open-folder-result"></p>
+                <p class="form-hint" id="upload-result"></p>
+                <div class="gallery-staged" id="gallery-staged"></div>
+                <p class="form-hint">也可以直接用资源管理器把图片拷进 <code id="data-dir-hint">…</code> 下的 normal / anomaly 子目录，效果一样。</p>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">⚙️ 第二步：增量入库</div>
+                <p class="form-hint">把刚才放好的图片正式教给 AI。<b>已经教过的图片会自动跳过</b>，重复点按钮不会重复计入。完成后立即生效，<b>不需要重启面板</b>。</p>
+                <div class="btn-group">
+                    <button type="button" class="btn-primary" id="btn-ingest">🚀 增量入库</button>
+                    <button type="button" class="btn-secondary" id="btn-gallery-refresh">🔄 刷新状态</button>
+                </div>
+                <div class="gallery-progress" id="ingest-progress" style="display:none">
+                    <div class="gallery-progress-bar"><div class="gallery-progress-fill" id="ingest-fill"></div></div>
+                    <p class="form-hint" id="ingest-text"></p>
+                </div>
+                <p class="form-hint" id="ingest-result"></p>
+            </div>
+
+            <div class="settings-card">
+                <div class="settings-card-title">📖 操作指引</div>
+                <details class="gallery-guide" open>
+                    <summary>怎么放图片、选图片、更新入库</summary>
+                    <ol>
+                        <li><b>找图片</b>：报警画面在项目根目录的 <code>data/alerts_review/</code>，判定正常的画面在 <code>data/normal_review/</code>。文件名形如 <code>602155_20261113_210254_P0.81_原图_1.jpg</code>：开头是打印机编号后 6 位，中间是日期时间，<code>P0.81</code> 是 AI 打的异常分。同一次报警的几张图前缀完全相同、只有末尾 <code>_1 _2 _3</code> 不同，按文件名排序就聚在一起。</li>
+                        <li><b>挑图片</b>：一次报警只挑 <b>1 张</b>最典型的。连拍的几张画面几乎一样，全放进去等于给同一幕投好几票，会把 AI 带偏。</li>
+                        <li><b>选分类</b>：按你自己的判断选，不是按 AI 的判断选。
+                            <ul>
+                                <li>画面其实没问题、是 AI 误报 → 选 <b>✅ 正常</b></li>
+                                <li>确实拉丝 / 塌陷 / 堵头 / 炒面 → 选 <b>🚨 异常</b></li>
+                                <li>自己也拿不准 → 选 <b>❓ 待定</b>（先存着，不会教给 AI；想清楚了再改分类重新上传）</li>
+                            </ul>
+                        </li>
+                        <li><b>放图片</b>：两种方式任选一种。
+                            <ul>
+                                <li>网页上传：点 <b>📂 打开报警图片文件夹</b> 直接弹出报警图片所在的文件夹（路径会自动复制好；在「选择图片」对话框的地址栏粘贴回车就能直达）→ 选好分类 → 点「选择图片」（可多选，单次最多 20 张）→ 点 <b>⬆️ 上传素材</b>。</li>
+                                <li>直接拷文件：用资源管理器打开「第一步」卡片下方显示的那个目录，把图片放进 <code>normal</code>（正常）或 <code>anomaly</code>（异常）文件夹，效果一样。</li>
+                            </ul>
+                        </li>
+                        <li><b>更新入库</b>：点 <b>🚀 增量入库</b>，等进度条走完。几十张图大概十几秒到一分钟，期间电脑会有点卡，尽量别和 Bambu Studio 切片同时跑。看到「✅ 完成」就已经生效了，不用重启，上面的样本数会跟着变。</li>
+                    </ol>
+                    <p class="form-hint"><b>几个要知道的点</b></p>
+                    <ul>
+                        <li>上传只是把图片放好，<b>不点「增量入库」就不会生效</b>。</li>
+                        <li>入库是<b>追加</b>，不会清掉 AI 已经学过的图片。</li>
+                        <li>同一张图重复入库不会重复计入；但<b>改个名字再上传会被当成新图片</b>。</li>
+                        <li>教错了目前没有网页撤销入口，所以挑图时尽量看准。</li>
+                        <li>「📂 打开报警图片文件夹」是在<b>运行面板的那台电脑</b>上弹窗；用别的电脑打开面板时，直接用「选择图片」上传即可。</li>
+                        <li>报警太频繁或老漏报，调上方的「🎚️ 判定阈值」，改完立即生效。</li>
+                    </ul>
+                </details>
+            </div>
+        </div>
     </div>
 
     <!-- 修改密码 Tab -->
@@ -681,6 +790,225 @@ document.getElementById('btn-logout').addEventListener('click', async () => {
     await fetch('/api/auth/logout', {method: 'POST'});
     location.href = '/';
 });
+
+// ===== AI 图库 =====
+let galleryTimer = null;
+
+function galleryError(text) {
+    const el = document.getElementById('gallery-error');
+    el.textContent = text ? '⚠️ ' + text : '';
+    el.style.display = text ? 'block' : 'none';
+}
+
+function renderJob(job) {
+    const wrap = document.getElementById('ingest-progress');
+    const btn = document.getElementById('btn-ingest');
+    const result = document.getElementById('ingest-result');
+    if (!job) { wrap.style.display = 'none'; return; }
+    if (job.state === 'running') {
+        const pct = job.total ? Math.round(job.done / job.total * 100) : 0;
+        wrap.style.display = 'block';
+        document.getElementById('ingest-fill').style.width = pct + '%';
+        document.getElementById('ingest-text').textContent =
+            `正在提特征 ${job.done}/${job.total}（${pct}%）· 已入库 ${job.added} · 跳过重复 ${job.skipped}`;
+        btn.disabled = true;
+        btn.textContent = '⏳ 入库中…';
+        result.textContent = '';
+        return;
+    }
+    btn.disabled = false;
+    btn.textContent = '🚀 增量入库';
+    wrap.style.display = 'none';
+    if (job.state === 'error') {
+        result.textContent = '❌ 入库失败：' + (job.error || '未知错误');
+    } else if (job.added) {
+        result.textContent = `✅ 完成：新增 ${job.added} 张（正常 ${job.added_normal} / 异常 ${job.added_anomaly}），`
+            + `跳过重复 ${job.skipped} 张，失败 ${job.failed} 张。已热生效，无需重启。`;
+    } else if (job.failed) {
+        result.textContent = `❌ ${job.failed} 张图片全部入库失败（跳过重复 ${job.skipped} 张），图库没有改动。`
+            + '请确认这些图片能正常打开、格式是 jpg/png，然后重新入库。';
+    } else {
+        result.textContent = `ℹ️ 没有新图片需要入库（跳过重复 ${job.skipped} 张）。`;
+    }
+}
+
+function renderGallery(d) {
+    const g = d.gallery || {};
+    document.getElementById('gs-normal').textContent = g.n_normal ?? '—';
+    document.getElementById('gs-anomaly').textContent = g.n_anomaly ?? '—';
+    document.getElementById('gs-k').textContent = g.k ?? '—';
+    const th = d.threshold != null ? d.threshold : g.decision_threshold;
+    document.getElementById('gs-threshold').textContent =
+        th != null ? Number(th).toFixed(2) : '—';
+    const thInput = document.getElementById('threshold-input');
+    // 正在编辑时不要覆盖用户输入（入库进度轮询每 1.5s 会重渲染一次）
+    if (th != null && document.activeElement !== thInput) thInput.value = Number(th).toFixed(2);
+    document.getElementById('btn-threshold').disabled = !d.available;
+    document.getElementById('gallery-meta').textContent = g.embed_dim
+        ? `AI 模型已就绪 · 图库建立于 ${g.created || '未知'}`
+        : '检测器尚未就绪，暂无图库统计';
+    document.getElementById('data-dir-hint').textContent = d.data_dir || '（未定位到部署目录）';
+
+    const s = d.staged || {};
+    const names = {normal: '✅ 正常', anomaly: '🚨 异常', uncertain: '❓ 待定'};
+    const box = document.getElementById('gallery-staged');
+    box.textContent = '';
+    for (const key of ['normal', 'anomaly', 'uncertain']) {
+        const it = s[key] || {total: 0, new: 0};
+        const item = document.createElement('div');
+        item.className = 'gallery-staged-item';
+        const label = document.createElement('span');
+        label.textContent = names[key];
+        const num = document.createElement('b');
+        num.textContent = it.total;
+        const tail = document.createElement('i');
+        tail.textContent = key === 'uncertain' ? '不自动入库' : `其中 ${it.new} 张待入库`;
+        item.append(label, num, document.createTextNode(' 张 '), tail);
+        box.appendChild(item);
+    }
+
+    renderJob(d.job);
+    const running = d.job && d.job.state === 'running';
+    if (running && !galleryTimer) galleryTimer = setInterval(loadGallery, 1500);
+    if (!running && galleryTimer) { clearInterval(galleryTimer); galleryTimer = null; }
+
+    document.getElementById('btn-upload').disabled = !d.deploy_dir;
+    document.getElementById('btn-ingest').disabled = !d.available || running;
+    galleryError(d.available ? '' : (d.init_error
+        || (d.enabled ? 'AI 检测器不可用，无法提特征' : 'AI 异常检测已禁用（printers.yaml 的 ai_guard.enabled）')));
+}
+
+async function loadGallery() {
+    try {
+        const resp = await fetch('/api/ai/gallery');
+        const d = await resp.json();
+        if (!resp.ok) { galleryError(d.detail || '读取图库状态失败'); return; }
+        renderGallery(d);
+    } catch (e) { galleryError(e.message); }
+}
+
+async function copyPath(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch (e) {
+        // 用局域网 http 地址打开面板时不是安全上下文，clipboard API 不可用
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e2) { ok = false; }
+        ta.remove();
+        return ok;
+    }
+}
+
+document.getElementById('btn-open-folder').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-open-folder');
+    const out = document.getElementById('open-folder-result');
+    btn.disabled = true;
+    out.textContent = '正在打开…';
+    try {
+        const resp = await fetch('/api/ai/open-folder', {method: 'POST'});
+        const d = await resp.json();
+        if (!resp.ok) throw new Error(typeof d.detail === 'string' ? d.detail : '打开失败');
+        const copied = await copyPath(d.path);
+        out.textContent = `✅ 已在运行面板的电脑上打开 ${d.path}。`
+            + (copied ? '路径已复制，' : '请手动复制上面这行路径，')
+            + '粘到「选择图片」对话框的地址栏回车即可直达（网页无法直接指定对话框的起始位置）。';
+    } catch (e) {
+        out.textContent = '❌ ' + e.message;
+    } finally {
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('btn-upload').addEventListener('click', async () => {
+    const input = document.getElementById('upload-files');
+    const out = document.getElementById('upload-result');
+    if (!input.files.length) { showMsg('请先选择图片', true); return; }
+    if (input.files.length > 20) { showMsg('单次最多 20 张，请分批上传', true); return; }
+    const fd = new FormData();
+    fd.append('label', document.getElementById('upload-label').value);
+    for (const f of input.files) fd.append('files', f);
+    const btn = document.getElementById('btn-upload');
+    btn.disabled = true;
+    btn.textContent = '上传中…';
+    try {
+        const resp = await fetch('/api/ai/gallery/upload', {method: 'POST', body: fd});
+        const d = await resp.json();
+        if (!resp.ok) {
+            out.textContent = '❌ ' + (d.detail || '上传失败');
+        } else {
+            out.textContent = `✅ 已存入 ${d.saved.length} 张`
+                + (d.errors.length ? `；${d.errors.length} 张失败：`
+                    + d.errors.map(e => `${e.name}（${e.error}）`).join('、') : '')
+                + '。接着点第二步「增量入库」。';
+            input.value = '';
+            loadGallery();
+        }
+    } catch (e) {
+        out.textContent = '❌ ' + e.message;
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '⬆️ 上传素材';
+    }
+});
+
+document.getElementById('btn-ingest').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-ingest');
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/ai/gallery/ingest', {method: 'POST'});
+        const d = await resp.json();
+        if (!resp.ok) {
+            showMsg('入库启动失败: ' + (d.detail || '未知错误'), true);
+            btn.disabled = false;
+            return;
+        }
+        renderJob(d);
+        if (!galleryTimer) galleryTimer = setInterval(loadGallery, 1500);
+    } catch (e) {
+        showMsg('入库启动失败: ' + e.message, true);
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('btn-threshold').addEventListener('click', async () => {
+    const input = document.getElementById('threshold-input');
+    const out = document.getElementById('threshold-result');
+    const btn = document.getElementById('btn-threshold');
+    const v = Number(input.value);
+    if (!Number.isFinite(v) || v < 0.05 || v > 0.95) {
+        out.textContent = '❌ 阈值请填 0.05 ~ 0.95 之间的数字';
+        return;
+    }
+    btn.disabled = true;
+    try {
+        const resp = await fetch('/api/ai/threshold', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({threshold: v}),
+        });
+        const d = await resp.json();
+        if (!resp.ok) {
+            out.textContent = '❌ ' + (typeof d.detail === 'string' ? d.detail : '保存失败');
+        } else {
+            out.textContent = `✅ 阈值已从 ${Number(d.previous).toFixed(2)} 改为 ${Number(d.threshold).toFixed(2)}，立即生效。`;
+            loadGallery();
+        }
+    } catch (e) {
+        out.textContent = '❌ ' + e.message;
+    } finally {
+        btn.disabled = false;
+    }
+});
+
+document.getElementById('btn-gallery-refresh').addEventListener('click', loadGallery);
+document.querySelector('.tab-btn[data-tab="ai"]').addEventListener('click', loadGallery);
 
 // 初始化 WebSocket 连接
 initWebSocket();

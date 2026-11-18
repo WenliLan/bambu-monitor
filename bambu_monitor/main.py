@@ -70,6 +70,9 @@ def _setup_logging(log_dir: str, debug: bool = False) -> Path:
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
     logging.getLogger("AiBotSDK").setLevel(logging.WARNING)
+    # lark-oapi 在 INFO 级别打印 ws-frontier 的完整长连接 URL，其中含 access_key，
+    # 会落进 logs/app.log（按天保留 7 份）；连接状态由 feishu.py 自己的健康检查负责
+    logging.getLogger("Lark").setLevel(logging.WARNING)
 
     return log_path
 

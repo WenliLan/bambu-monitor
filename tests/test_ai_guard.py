@@ -6,10 +6,16 @@
   - 测试 WebSocket 广播和企微通知入队
 """
 
+import asyncio
+import json
+import sys
+import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import numpy as np
 import pytest
 
 from bambu_monitor.config import AIGuardSettings
@@ -495,4 +501,396 @@ class TestAIGuardInitThresholdSync:
         # ai_config 优先于 meta.json
         assert mock_gallery.decision_threshold == 0.7
         mock_gallery.update_threshold.assert_called_once_with(0.7)
+
+
+# ========== 图库增量入库 ==========
+
+class _FakeGallery:
+    """替代 knn.FeatureGallery：路径落盘，特征不落盘（测试不关心向量）"""
+
+    def __init__(self, gallery_dir, k=5, decision_threshold=0.7):
+        self.dir = Path(gallery_dir)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.k = k
+        self.decision_threshold = decision_threshold
+        self.save_calls = 0
+        store = self.dir / "paths.json"
+        data = json.loads(store.read_text(encoding="utf-8")) if store.exists() else {}
+        self.normal_paths = data.get("normal", [])
+        self.anomaly_paths = data.get("anomaly", [])
+
+    def add(self, feat, label, path, autosave=True):
+        getattr(self, f"{label}_paths").append(path)
+        if autosave:
+            self.save()
+
+    def save(self):
+        self.save_calls += 1
+        (self.dir / "paths.json").write_text(
+            json.dumps({"normal": self.normal_paths, "anomaly": self.anomaly_paths}),
+            encoding="utf-8")
+
+    def update_threshold(self, value):
+        self.decision_threshold = value
+        return value
+
+
+def _fake_deploy(tmp_path, staged: dict[str, list[str]], known: dict | None = None):
+    """搭一个假的部署目录：data/<label>/ 放素材，gallery/ 放已入库记录"""
+    for label, names in staged.items():
+        d = tmp_path / "data" / label
+        d.mkdir(parents=True, exist_ok=True)
+        for n in names:
+            (d / n).write_bytes(b"\xff\xd8\xff\xd9")
+    gal = tmp_path / "gallery"
+    gal.mkdir(parents=True, exist_ok=True)
+    if known:
+        (gal / "paths.json").write_text(json.dumps(known), encoding="utf-8")
+    return tmp_path
+
+
+def _fake_modules():
+    extractor = MagicMock()
+    extractor.extract_batch = lambda paths, batch_size=16: np.zeros(
+        (len(paths), 384), dtype="float32")
+    knn = MagicMock()
+    knn.FeatureGallery = _FakeGallery
+    return {"extractor": extractor, "knn": knn}
+
+
+def _guard_with_gallery(tmp_path, **cfg):
+    guard = AIGuardLoop(_make_ai_config(**cfg), MagicMock(), MagicMock(), MagicMock())
+    guard._deploy_dir = tmp_path
+    detector = MagicMock()
+    detector.k = 5
+    detector.threshold = 0.7
+    detector.gallery = _FakeGallery(tmp_path / "gallery")
+    guard._detector = detector
+    return guard
+
+
+class TestGalleryIngest:
+    """TC-AI-20~24: 增量入库、去重、热替换"""
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_20_ingest_dedup_and_hot_swap(self, tmp_path):
+        """TC-AI-20: 跳过已入库、忽略 uncertain、完成后热替换图库"""
+        deploy = _fake_deploy(tmp_path, {
+            "normal": ["a.jpg", "b.jpg"],
+            "anomaly": ["c.jpg"],
+            "uncertain": ["d.jpg"],
+        }, known={"normal": ["data/normal/a.jpg"], "anomaly": []})
+        guard = _guard_with_gallery(deploy, threshold=0.7)
+        old_gallery = guard._detector.gallery
+
+        with patch.dict(sys.modules, _fake_modules()):
+            job = await guard.ingest_gallery()
+            await guard._ingest_task
+
+        assert job["state"] == "done"
+        assert job["skipped"] == 1
+        assert job["added"] == 2
+        assert job["added_normal"] == 1
+        assert job["added_anomaly"] == 1
+        assert job["failed"] == 0
+        assert guard._detector.gallery is not old_gallery
+        assert guard._detector.gallery.decision_threshold == 0.7
+        assert "data/normal/b.jpg" in guard._detector.gallery.normal_paths
+        assert "data/anomaly/c.jpg" in guard._detector.gallery.anomaly_paths
+        assert not any("uncertain" in p for p in guard._detector.gallery.normal_paths)
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_21_second_run_adds_nothing(self, tmp_path):
+        """TC-AI-21: 重复点入库不会重复计入（add 本身不去重，靠路径比对）"""
+        deploy = _fake_deploy(tmp_path, {"normal": ["a.jpg"], "anomaly": ["c.jpg"]})
+        guard = _guard_with_gallery(deploy)
+
+        with patch.dict(sys.modules, _fake_modules()):
+            await guard.ingest_gallery()
+            await guard._ingest_task
+            first = guard._detector.gallery
+            job2 = await guard.ingest_gallery()
+            await guard._ingest_task
+
+        assert job2["added"] == 0
+        assert job2["skipped"] == 2
+        assert guard._detector.gallery is first  # 无新增时不替换
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_22_ingest_requires_detector(self, tmp_path):
+        """TC-AI-22: 检测器不可用时拒绝入库"""
+        guard = AIGuardLoop(_make_ai_config(), MagicMock(), MagicMock(), MagicMock())
+        guard._deploy_dir = tmp_path
+        with pytest.raises(RuntimeError):
+            await guard.ingest_gallery()
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_23_bad_image_counted_as_failed(self, tmp_path):
+        """TC-AI-23: 单张提特征失败只计 failed，不影响其余图片"""
+        deploy = _fake_deploy(tmp_path, {"normal": ["ok.jpg", "bad.jpg"]})
+        guard = _guard_with_gallery(deploy)
+        mods = _fake_modules()
+
+        def flaky(paths, batch_size=16):
+            if any(Path(p).name == "bad.jpg" for p in paths):
+                raise ValueError("corrupt jpeg")
+            return np.zeros((len(paths), 384), dtype="float32")
+
+        mods["extractor"].extract_batch = flaky
+        with patch.dict(sys.modules, mods):
+            await guard.ingest_gallery()
+            await guard._ingest_task
+
+        job = guard._ingest_job
+        assert job["added"] == 1
+        assert job["failed"] == 1
+        assert job["state"] == "done"
+
+    def test_tc_ai_24_status_without_detector(self, tmp_path):
+        """TC-AI-24: 检测器未就绪时仍能列出待入库素材"""
+        deploy = _fake_deploy(tmp_path, {"normal": ["a.jpg"], "uncertain": ["u.jpg"]})
+        guard = AIGuardLoop(_make_ai_config(enabled=False),
+                            MagicMock(), MagicMock(), MagicMock())
+        guard._deploy_dir = deploy
+        info = guard.gallery_status()
+        assert info["available"] is False
+        assert info["staged"]["normal"]["total"] == 1
+        assert info["staged"]["uncertain"]["total"] == 1
+        assert info["data_dir"] == str(deploy / "data")
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_29_job_total_known_before_worker_runs(self, tmp_path):
+        """TC-AI-29: 启动响应即带真实 total/skipped，前端进度条不会从 0/0 起跳"""
+        deploy = _fake_deploy(tmp_path, {
+            "normal": ["a.jpg", "b.jpg"],
+            "anomaly": ["c.jpg"],
+        }, known={"normal": ["data/normal/a.jpg"], "anomaly": []})
+        guard = _guard_with_gallery(deploy)
+
+        with patch.dict(sys.modules, _fake_modules()):
+            job = await guard.ingest_gallery()
+            # 尚未让出控制权，worker 还没跑：此刻的值就是 POST 返回给前端的值
+            assert job["total"] == 2
+            assert job["skipped"] == 1
+            assert job["done"] == 0
+            await guard._ingest_task
+
+        assert job["done"] == 2
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_37_concurrent_ingest_runs_one_worker(self, tmp_path):
+        """TC-AI-37: 并发点两次入库只起一个 worker，返回同一个 job"""
+        deploy = _fake_deploy(tmp_path, {"normal": ["a.jpg", "b.jpg", "c.jpg"]})
+        guard = _guard_with_gallery(deploy)
+        started = []
+        real_worker = guard._ingest_worker
+
+        def slow_worker(job, pending):
+            started.append(job)
+            time.sleep(0.05)
+            real_worker(job, pending)
+
+        guard._ingest_worker = slow_worker
+        with patch.dict(sys.modules, _fake_modules()):
+            j1, j2 = await asyncio.gather(guard.ingest_gallery(), guard.ingest_gallery())
+            await guard._ingest_task
+
+        assert j1 is j2
+        assert len(started) == 1
+        assert j1["added"] == 3
+        assert len(guard._detector.gallery.normal_paths) == 3
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_38_stop_aborts_ingest_without_writing(self, tmp_path):
+        """TC-AI-38: 面板停止时入库线程退出，不落盘、不热替换"""
+        deploy = _fake_deploy(tmp_path, {"normal": [f"{i}.jpg" for i in range(40)]})
+        guard = _guard_with_gallery(deploy)
+        old_gallery = guard._detector.gallery
+        mods = _fake_modules()
+        gate = threading.Event()
+        entered = threading.Event()
+        exited = threading.Event()
+
+        def blocking_extract(paths, batch_size=16):
+            entered.set()
+            gate.wait(5)
+            return np.zeros((len(paths), 384), dtype="float32")
+
+        mods["extractor"].extract_batch = blocking_extract
+        real_worker = guard._ingest_worker
+
+        def worker(job, pending):
+            try:
+                real_worker(job, pending)
+            finally:
+                exited.set()
+
+        guard._ingest_worker = worker
+        with patch.dict(sys.modules, mods):
+            job = await guard.ingest_gallery()
+            # 必须等 worker 真的卡在提特征里，否则 cancel 掉的是还没启动的任务
+            assert await asyncio.to_thread(entered.wait, 2), "worker 未进入提特征"
+            guard.stop()
+            gate.set()
+            with pytest.raises(asyncio.CancelledError):
+                await guard._ingest_task
+
+        assert exited.wait(2), "入库线程没有随 stop() 退出"
+        assert job["state"] == "error"
+        assert guard._detector.gallery is old_gallery
+        assert not (deploy / "gallery" / "paths.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_tc_ai_39_bulk_ingest_saves_once(self, tmp_path):
+        """TC-AI-39: 批量入库只写一次盘（每张都写是 O(n²) 全量重写）"""
+        names = [f"{i}.jpg" for i in range(5)]
+        deploy = _fake_deploy(tmp_path, {"normal": names})
+        guard = _guard_with_gallery(deploy)
+
+        with patch.dict(sys.modules, _fake_modules()):
+            await guard.ingest_gallery()
+            await guard._ingest_task
+
+        gal = guard._detector.gallery
+        assert gal.save_calls == 1
+        stored = json.loads((deploy / "gallery" / "paths.json").read_text(encoding="utf-8"))
+        assert stored["normal"] == [f"data/normal/{n}" for n in names]
+
+
+class TestGalleryUpload:
+    """TC-AI-25~28: 上传素材的边界与安全"""
+
+    def test_tc_ai_25_upload_lands_in_label_dir(self, tmp_path):
+        """TC-AI-25: 正常上传落到 data/<label>/ 并返回相对路径"""
+        guard = _guard_with_gallery(tmp_path)
+        rel = guard.stage_upload("anomaly", "photo.jpg", b"\xff\xd8\xff\xd9")
+        assert rel == "data/anomaly/photo.jpg"
+        assert (tmp_path / rel).read_bytes() == b"\xff\xd8\xff\xd9"
+
+    def test_tc_ai_26_upload_cannot_escape_data_dir(self, tmp_path):
+        """TC-AI-26: 路径穿越被 basename 化解，文件仍留在 data/ 内"""
+        guard = _guard_with_gallery(tmp_path)
+        rel = guard.stage_upload("normal", "..\\..\\evil.jpg", b"x")
+        assert rel == "data/normal/evil.jpg"
+        assert not (tmp_path.parent / "evil.jpg").exists()
+
+    def test_tc_ai_27_upload_rejects_bad_input(self, tmp_path):
+        """TC-AI-27: 非法分类 / 非图片 / 空文件 / 超大文件一律拒绝"""
+        guard = _guard_with_gallery(tmp_path)
+        for label, name, payload in [
+            ("nope", "a.jpg", b"x"),
+            ("normal", "a.txt", b"x"),
+            ("normal", "a.jpg", b""),
+            ("normal", "a.jpg", b"x" * (20 * 1024 * 1024 + 1)),
+        ]:
+            with pytest.raises(ValueError):
+                guard.stage_upload(label, name, payload)
+
+    def test_tc_ai_28_upload_does_not_overwrite(self, tmp_path):
+        """TC-AI-28: 同名文件自动加序号，不覆盖已有素材"""
+        guard = _guard_with_gallery(tmp_path)
+        first = guard.stage_upload("normal", "a.jpg", b"1")
+        second = guard.stage_upload("normal", "a.jpg", b"2")
+        assert first == "data/normal/a.jpg"
+        assert second == "data/normal/a_1.jpg"
+        assert (tmp_path / first).read_bytes() == b"1"
+
+
+class TestFlatImageSaving:
+    """TC-AI-30~33: 报警/推理图片平铺保存，不再建事件子目录"""
+
+    def test_tc_ai_30_alarm_frames_flat(self, tmp_path):
+        """TC-AI-30: 报警多帧直接落在 alert_dir 根下，无子目录"""
+        alert_dir = tmp_path / "alerts_review"
+        guard = _guard_with_gallery(tmp_path, alert_dir=str(alert_dir))
+        guard._save_alarm_frames([b"f1", b"f2", b"f3"], 0.81, "01P00C650602155")
+
+        files = sorted(p.name for p in alert_dir.iterdir())
+        assert len(files) == 3
+        assert all(p.is_file() for p in alert_dir.iterdir())
+        assert [f[-len("_原图_1.jpg"):] for f in files] == ["_原图_1.jpg", "_原图_2.jpg", "_原图_3.jpg"]
+        assert all(f.startswith("602155_") and "_P0.81_" in f for f in files)
+        assert (alert_dir / files[0]).read_bytes() == b"f1"
+        assert (alert_dir / files[2]).read_bytes() == b"f3"
+
+    def test_tc_ai_31_single_frame_flat_by_probability(self, tmp_path, monkeypatch):
+        """TC-AI-31: 单帧按概率分流，两边都是平铺文件"""
+        monkeypatch.chdir(tmp_path)
+        alert_dir = tmp_path / "alerts_review"
+        guard = _guard_with_gallery(tmp_path, alert_dir=str(alert_dir))
+        guard._detector.threshold = 0.7
+
+        guard._save_frame(b"bad", 0.9, "01P00C650602155")
+        guard._save_frame(b"ok", 0.2, "01P00C650602155")
+
+        alerts = list(alert_dir.iterdir())
+        normals = list((tmp_path / "data" / "normal_review").iterdir())
+        assert len(alerts) == 1 and alerts[0].is_file()
+        assert len(normals) == 1 and normals[0].is_file()
+        assert alerts[0].name.endswith("_P0.90_原图.jpg")
+        assert normals[0].name.endswith("_P0.20_原图.jpg")
+        assert alerts[0].read_bytes() == b"bad"
+        assert normals[0].read_bytes() == b"ok"
+
+    def test_tc_ai_32_two_events_do_not_mix(self, tmp_path):
+        """TC-AI-32: 两次报警各自成组，前缀不同、互不覆盖"""
+        alert_dir = tmp_path / "alerts_review"
+        guard = _guard_with_gallery(tmp_path, alert_dir=str(alert_dir))
+        guard._save_alarm_frames([b"a"], 0.8, "SERIAL000001")
+        with patch("bambu_monitor.printer.ai_guard.datetime") as dt:
+            dt.now.return_value.strftime.return_value = "20990101_000000"
+            guard._save_alarm_frames([b"b"], 0.9, "SERIAL000002")
+
+        files = sorted(p.name for p in alert_dir.iterdir())
+        assert len(files) == 2
+        assert files[0].startswith("000001_") and files[1].startswith("000002_")
+        assert {p.read_bytes() for p in alert_dir.iterdir()} == {b"a", b"b"}
+
+    def test_tc_ai_33_status_exposes_threshold(self, tmp_path):
+        """TC-AI-33: gallery_status 顶层带 threshold，检测器不可用时为 None"""
+        guard = _guard_with_gallery(tmp_path)
+        assert guard.gallery_status()["threshold"] == 0.7
+
+        bare = AIGuardLoop(_make_ai_config(enabled=False),
+                           MagicMock(), MagicMock(), MagicMock())
+        bare._deploy_dir = tmp_path
+        assert bare.gallery_status()["threshold"] is None
+
+
+class TestOpenAlertFolder:
+    """TC-AI-34~36: 后端直接打开报警图片目录（浏览器无法预设文件框起始路径）"""
+
+    def test_tc_ai_34_opens_configured_alert_dir(self, tmp_path):
+        """TC-AI-34: 打开配置里的 alert_dir，目录不存在时先建好"""
+        alert_dir = tmp_path / "alerts_review"
+        guard = _guard_with_gallery(tmp_path, alert_dir=str(alert_dir))
+        assert not alert_dir.exists()
+
+        with patch("bambu_monitor.printer.ai_guard.os") as fake_os:
+            returned = guard.open_alert_folder()
+
+        assert returned == str(alert_dir.resolve())
+        assert alert_dir.is_dir()
+        fake_os.startfile.assert_called_once_with(str(alert_dir.resolve()))
+
+    def test_tc_ai_35_relative_alert_dir_resolved(self, tmp_path, monkeypatch):
+        """TC-AI-35: 出厂相对路径 ./data/alerts_review 按进程工作目录解析成绝对路径"""
+        monkeypatch.chdir(tmp_path)
+        guard = _guard_with_gallery(tmp_path, alert_dir="./data/alerts_review")
+
+        with patch("bambu_monitor.printer.ai_guard.os") as fake_os:
+            returned = guard.open_alert_folder()
+
+        expected = tmp_path / "data" / "alerts_review"
+        assert Path(returned).is_absolute()
+        assert returned == str(expected.resolve())
+        assert expected.is_dir()
+        fake_os.startfile.assert_called_once_with(returned)
+
+    def test_tc_ai_36_non_windows_raises(self, tmp_path):
+        """TC-AI-36: 平台没有 os.startfile 时报错，不静默失败"""
+        guard = _guard_with_gallery(tmp_path, alert_dir=str(tmp_path / "alerts_review"))
+        with patch("bambu_monitor.printer.ai_guard.os", spec=[]):
+            with pytest.raises(RuntimeError):
+                guard.open_alert_folder()
         

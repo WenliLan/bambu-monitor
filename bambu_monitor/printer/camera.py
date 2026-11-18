@@ -11,7 +11,8 @@
 import asyncio
 import logging
 import socket
-from typing import Optional
+import time
+from typing import Callable, Optional
 
 from ..config import PrinterConfig
 from .rtspcam import find_ffmpeg, capture_rtsp_frame
@@ -24,6 +25,11 @@ PROTO_RTSPS = "rtsps"    # RTSPS 322，X1/P2/X2/H2 系
 
 # 端口探测超时（秒）
 PROBE_TIMEOUT = 1.5
+
+# 无人观看时暂停抓帧：观看信号的宽限期 + 暂停期间的最长休眠
+# （暂停不是死等：到点仍要醒来重新判断，也便于进程退出时及时响应）
+VIEWER_GRACE = 30.0
+IDLE_WAKE_WAIT = 30.0
 
 
 def _tcp_reachable(ip: str, port: int, timeout: float = PROBE_TIMEOUT) -> bool:
@@ -46,9 +52,32 @@ class CameraManager:
         self._supported: dict[str, bool] = {}
         self._protocol: dict[str, Optional[str]] = {}  # serial -> 探测到的协议（None=未定）
 
+        # 按需抓帧：由 app 注入"是否有 WS 观看者"的回调，note_viewer() 记录 HTTP/通知取帧
+        self._has_viewers: Optional[Callable[[], bool]] = None
+        self._last_view_hit: float = 0.0
+        self._wake = asyncio.Event()
+
         # 判断哪些打印机支持摄像头（配了 ip+access_code 即可，协议由探测决定）
         for c in configs:
             self._supported[c.serial] = bool(c.ip and c.access_code)
+
+    def set_viewers_check(self, fn: Callable[[], bool]):
+        """注入观看者探测回调（通常为"WS 连接数 > 0"）"""
+        self._has_viewers = fn
+
+    def note_viewer(self):
+        """记录一次"有人要画面"：面板 HTTP 抓图、通知截图、AI 检测都算"""
+        self._last_view_hit = time.monotonic()
+        try:
+            self._wake.set()
+        except RuntimeError:
+            # 事件循环不在运行（如启动前的同步调用），忽略
+            pass
+
+    def _viewer_active(self) -> bool:
+        if self._has_viewers is not None and self._has_viewers():
+            return True
+        return (time.monotonic() - self._last_view_hit) < VIEWER_GRACE
 
     async def capture_all_loop(self, interval: float = 3.0):
         """后台循环获取所有打印机摄像头帧
@@ -57,8 +86,29 @@ class CameraManager:
             interval: 帧刷新间隔（秒）
         """
         self._running = True
-        logger.info("摄像头捕获循环启动，间隔: %ss", interval)
+        logger.info("摄像头捕获循环启动，间隔: %ss（无人观看时自动暂停）", interval)
+        idle_logged = False
+        # 暂停/恢复是高频翻转：AI 检测周期、通知截图都会 note_viewer() 把循环唤醒，
+        # 30s 宽限期过后又回到暂停，稳定时每几分钟就打一对。首次用 INFO 把机制讲清楚，
+        # 之后一律 DEBUG；恢复事件信息量更低，直接 DEBUG。
+        pause_noticed = False
         while self._running:
+            if not self._viewer_active():
+                if not idle_logged:
+                    log = logger.debug if pause_noticed else logger.info
+                    log("无面板观看/取帧请求，摄像头抓帧暂停（每台每 %ss 一次 TLS 握手）",
+                        interval)
+                    pause_noticed = True
+                    idle_logged = True
+                self._wake.clear()
+                try:
+                    await asyncio.wait_for(self._wake.wait(), timeout=IDLE_WAKE_WAIT)
+                except (TimeoutError, asyncio.CancelledError):
+                    pass
+                continue
+            if idle_logged:
+                logger.debug("检测到观看者，摄像头抓帧恢复")
+                idle_logged = False
             tasks = []
             for serial in self._configs:
                 if self._supported.get(serial, False):
@@ -72,6 +122,10 @@ class CameraManager:
 
     def stop(self):
         self._running = False
+        try:
+            self._wake.set()
+        except RuntimeError:
+            pass
 
     def _detect_protocol(self, config: PrinterConfig) -> Optional[str]:
         """探测并缓存该打印机的摄像头协议

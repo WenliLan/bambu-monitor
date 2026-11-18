@@ -1063,3 +1063,122 @@ input[type="checkbox"] {
     cursor: pointer;
     font-size: 0.82rem;
 }
+
+/* ===== 设置页：AI 图库 ===== */
+.gallery-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.gallery-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+}
+
+.gallery-stat-num {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: var(--accent);
+}
+
+.gallery-stat-label {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+}
+
+.gallery-error {
+    color: var(--red);
+}
+
+.gallery-staged {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 12px 0;
+}
+
+.gallery-staged-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 0.82rem;
+}
+
+.gallery-staged-item b {
+    color: var(--accent);
+    font-size: 1rem;
+}
+
+.gallery-staged-item i {
+    color: var(--text-dim);
+    font-style: normal;
+}
+
+.gallery-progress {
+    margin-top: 14px;
+}
+
+.gallery-progress-bar {
+    height: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+
+.gallery-progress-fill {
+    height: 100%;
+    width: 0;
+    background: var(--accent);
+    transition: width 0.3s;
+}
+
+.gallery-guide summary {
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 10px;
+}
+
+.gallery-guide ol,
+.gallery-guide ul {
+    margin: 0 0 12px 20px;
+    font-size: 0.84rem;
+    color: var(--text-dim);
+}
+
+.gallery-guide li {
+    margin-bottom: 8px;
+}
+
+.gallery-guide b {
+    color: var(--text);
+}
+
+.gallery-guide code,
+.settings-card code {
+    padding: 1px 5px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.8rem;
+    word-break: break-all;
+}
+
+#upload-files {
+    font-size: 0.82rem;
+    color: var(--text-dim);
+}
