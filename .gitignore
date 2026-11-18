@@ -91,3 +91,6 @@ node_modules/
 # start_service.bat (tracked in main repo)
 bambu_monitor/IDEA.md
 register_autostart.ps1
+
+# 本地图库备份仓库(独立 .git, 无 remote); 外层 git 必须整体忽略它
+/gallery_store/
