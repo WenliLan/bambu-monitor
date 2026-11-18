@@ -53,6 +53,14 @@ bambu_ai_deploy_dinoknn/data/
 *.npy
 # 反选: dinoknn 特征库(gallery)随包分发, 不受上面的扩展名忽略
 !bambu_ai_deploy_dinoknn/gallery/**
+# 图库派生缓存与本地版本副本: 仅本机保留, 版本历史走独立本地仓库 H:/QoderWorkspace/gallery_store
+# 必须写在上面的 !gallery/** 之后, 否则会被那条反选重新纳入
+bambu_ai_deploy_dinoknn/gallery/features.npz
+bambu_ai_deploy_dinoknn/gallery_v*/
+bambu_ai_deploy_dinoknn/gallery_bak*/
+bambu_ai_deploy_dinoknn/gallery_pre_*/
+bambu_ai_deploy_dinoknn/eval_results*/
+bambu_ai_deploy_dinoknn/checks/
 # DINOv2 骨干权重缓存: torch.hub 首次运行自动下载, 不入库(离线分发见 GitHub Release 附件)
 bambu_ai_deploy_dinoknn/dinov2_cache/
 # 内部安全审查文档: 含真实凭据样例, 仅本地保留, 不公开分发

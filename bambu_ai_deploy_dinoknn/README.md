@@ -26,7 +26,7 @@ bambu_ai_deploy_dinoknn/
 │   ├── anomaly/            ← 异常图（自动加到 gallery 的 anomaly 类）
 │   ├── normal/             ← 正常图（自动加到 gallery 的 normal 类）
 │   └── uncertain/          ← 模型不确定的图（不会自动加，等用户标）
-├── gallery/                ← 特征库（仓库默认包含出厂初始数据 = local_data 全量特征）
+├── gallery/                ← 特征库（随包出厂数据 = 去重后的 benchmark/train + local_data 特征；*_paths.json 仅为来源审计标识，图片本身不分发）
 │   ├── anomaly_features.npy    [N_a, 384] float32, L2-normalized (git 跟踪)
 │   ├── normal_features.npy     [N_n, 384] float32, L2-normalized (git 跟踪)
 │   ├── anomaly_paths.json      对应图片路径（审计用，git 跟踪）
@@ -43,8 +43,9 @@ bambu_ai_deploy_dinoknn/
 
 ### ⚡ 跳过初始化直接用
 
-本仓库已将 `baselines/local_data/` (本机适配数据, 134 anomaly + 131 normal = 265 张)
-的 DINOv2 特征提取好提交在 `gallery/` 目录下，**clone 后可直接检测**：
+本仓库已将去重后的 `benchmark/train` 与 `local_data` 的 DINOv2 特征提取好提交在
+`gallery/` 目录下（720 anomaly + 536 normal = 1256 条，k=5，判定阈值 0.7），
+**clone 后可直接检测**：
 
 ```bash
 python scripts/detect_image.py test.jpg
